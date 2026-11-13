@@ -1,0 +1,13 @@
+{
+  "name": "castomo",
+  "version": "1.0.0",
+  "description": "Castomo / キャストモ: an online community for anglers across Japan.",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test.js",
+    "admin": "node admin.js"
+  }
+}
