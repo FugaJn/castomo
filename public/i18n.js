@@ -81,7 +81,11 @@ en: {
   allPrefs: 'All prefectures', searchSpots: 'Search spots', addSpot: 'Add spot', editSpot: 'Edit spot', spotName: 'Spot', typeLbl: 'Water', prefLbl: 'Prefecture', usedBy: 'In use', customTag: 'added by admin', edit: 'Edit', hide: 'Hide', show: 'Show',
   type_s: 'Saltwater', type_b: 'Brackish', type_f: 'Freshwater', noSpotsFound: 'No spots match.',
   spotsNote: 'Hidden spots disappear from the pickers but stay on existing posts and profiles.', nameEn: 'Name (English)', nameJa: 'Name (Japanese)', spotId: 'ID (optional)', spotIdHint: 'Lowercase letters, numbers and dashes. Leave empty to create it from the English name.',
-  spotTideNote: 'New spots start with the tide pattern of a nearby spot in the same prefecture. Tide values are sample data for now.',
+  spotTideNote: 'Coordinates decide which tide station and weather point the home page uses. Use the spot\'s approximate location (Google Maps: tap and hold, copy the numbers). Freshwater spots show weather only.',
+  latLbl: 'Latitude', lngLbl: 'Longitude',
+  fcLoading: 'Loading live tide and weather…', fcSample: 'Live data could not be loaded, so the values below are SAMPLE numbers, not a real forecast. Please try again later.',
+  fcSrc: (name, km) => 'Tide: official Japan Meteorological Agency predictions for the ' + name + ' station' + (km ? ' (about ' + km + ' km away; times can differ a little at your exact spot)' : '') + '. Weather and wind: Open-Meteo.',
+  fcSrcWx: 'Weather and wind: Open-Meteo.', fcNoTide: 'Tide data could not be loaded right now. Weather and wind are shown.',
   statusLbl: 'Status', replyPh: 'Reply to the user (they will see it)', saveReply: 'Save reply', noFeedback: 'No feedback here.',
   whitelistTitle: 'Admin whitelist', whitelistBody: 'Only the accounts listed here can open the admin pages. The server checks this list on every request.', role_owner: 'Owner', role_admin: 'Admin',
   adminNickPh: 'Nickname of an existing user', addAdmin: 'Make admin', adminAddNote: 'The person must already have an account. Owners cannot be removed here.', ownerOnly: 'Only the owner can change this list.',
@@ -96,7 +100,7 @@ en: {
   err_no_seats: 'No seats are free in that car.', err_already_requested: 'You already asked to join.', err_already_in: 'You are already going.', err_owner_exists: 'An owner already exists.',
   err_bad_code: 'That setup code is not right.', err_id_taken: 'That ID is already used.', err_not_found: 'Not found.', err_no_user: 'No user with that nickname.', err_owner_cannot_delete: 'Owner accounts cannot be deleted.',
   err_cannot_remove_owner: 'The owner cannot be removed.', err_too_large: 'That file is too large.', err_invalid_photo: 'That photo could not be used.', err_invalid_text: 'Please write at least 5 characters.',
-  err_invalid_date: 'That date is not valid.', err_invalid_spot: 'That spot is not valid.'
+  err_invalid_date: 'That date is not valid.', err_invalid_spot: 'That spot is not valid.', err_invalid_coords: 'Coordinates must be inside Japan (latitude 20 to 46, longitude 122 to 154).'
 },
 ja: {
   brand: 'キャストモ', sub: '釣り仲間とつながる',
@@ -170,7 +174,11 @@ ja: {
   allPrefs: 'すべての都道府県', searchSpots: '釣り場を検索', addSpot: '釣り場を追加', editSpot: '釣り場を編集', spotName: '釣り場', typeLbl: '水域', prefLbl: '都道府県', usedBy: '利用数', customTag: '管理者が追加', edit: '編集', hide: '非表示', show: '表示',
   type_s: '海', type_b: '汽水', type_f: '淡水', noSpotsFound: '該当する釣り場がありません。',
   spotsNote: '非表示にした釣り場は選択肢から消えますが、既存の投稿やプロフィールにはそのまま残ります。', nameEn: '名前(英語)', nameJa: '名前(日本語)', spotId: 'ID(任意)', spotIdHint: '小文字の英数字とハイフン。空欄なら英語名から自動で作成します。',
-  spotTideNote: '新しい釣り場は、同じ都道府県の近くの釣り場の潮のパターンで始まります。潮のデータは現在サンプルです。',
+  spotTideNote: '座標で、トップページが使う潮位観測地点と天気の地点が決まります。釣り場のおおよその位置を入力してください(Googleマップで長押しして数値をコピー)。淡水の釣り場は天気のみ表示します。',
+  latLbl: '緯度', lngLbl: '経度',
+  fcLoading: '潮位と天気を読み込み中…', fcSample: '最新データを読み込めなかったため、以下は実際の予報ではなく「サンプル」の数値です。しばらくしてからもう一度お試しください。',
+  fcSrc: (name, km) => '潮位:気象庁の潮位表(' + name + '検潮所' + (km ? '、約' + km + 'km離れています。実際の場所とは時刻が少し異なる場合があります' : '') + ')。天気・風:Open-Meteo。',
+  fcSrcWx: '天気・風:Open-Meteo。', fcNoTide: '潮位データを読み込めませんでした。天気と風を表示しています。',
   statusLbl: '状態', replyPh: 'ユーザーへの返信(本人に表示されます)', saveReply: '返信を保存', noFeedback: 'フィードバックはありません。',
   whitelistTitle: '管理者ホワイトリスト', whitelistBody: 'ここに載っているアカウントだけが管理ページを開けます。サーバーがリクエストのたびにこの一覧を確認します。', role_owner: 'オーナー', role_admin: '管理者',
   adminNickPh: '既存ユーザーのニックネーム', addAdmin: '管理者にする', adminAddNote: '先にアカウントを作成している必要があります。オーナーはここでは外せません。', ownerOnly: 'この一覧を変更できるのはオーナーだけです。',
@@ -184,6 +192,6 @@ ja: {
   err_no_seats: 'その車には空席がありません。', err_already_requested: 'すでに参加リクエスト済みです。', err_already_in: 'すでに参加しています。', err_owner_exists: 'すでにオーナーがいます。',
   err_bad_code: 'セットアップコードが違います。', err_id_taken: 'そのIDはすでに使われています。', err_not_found: '見つかりません。', err_no_user: 'そのニックネームのユーザーはいません。', err_owner_cannot_delete: 'オーナーのアカウントは削除できません。',
   err_cannot_remove_owner: 'オーナーは外せません。', err_too_large: 'ファイルが大きすぎます。', err_invalid_photo: 'その写真は使えませんでした。', err_invalid_text: '5文字以上で入力してください。',
-  err_invalid_date: '日付が正しくありません。', err_invalid_spot: '釣り場が正しくありません。'
+  err_invalid_date: '日付が正しくありません。', err_invalid_spot: '釣り場が正しくありません。', err_invalid_coords: '座標は日本国内(緯度20〜46、経度122〜154)で入力してください。'
 }
 };

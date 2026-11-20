@@ -26,7 +26,7 @@ const S = {
   room: 'all', q: '', fs: 'all', ft: 'all', aScope: 'all',
   group: null, openC: {},
   sheet: null, dirty: false,
-  data: null, spots: [], spotsRev: 0, sig: '',
+  data: null, spots: [], spotsRev: 0, sig: '', fc: {},
   loaded: false, loadError: false, rendered: false,
   admin: null, adminTab: 'overview', fbFilter: 'all', spotQ: '', spotPref: 'all',
   photo: null, readSent: {}, focusId: null
@@ -237,15 +237,94 @@ function tabs() {
 
 /* ---------- tide view ---------- */
 const windArrow = (d) => `<svg viewBox="0 0 24 24" style="transform:rotate(${Math.round(d)}deg)" aria-hidden="true"><path d="M12 3v16M12 20l-5-5M12 20l5-5"/></svg>`;
+/* ---------- live tide and weather ---------- */
+const JST = 9 * 3600000;
+function ensureForecast(id) {
+  const f = S.fc[id], age = f ? Date.now() - f.at : Infinity;
+  if (f && (f.busy || age < (f.status === 'ok' ? 30 * 60000 : 60000))) return f;
+  const rec = { status: f ? f.status : 'loading', data: f ? f.data : null, at: f ? f.at : Date.now(), busy: true };
+  S.fc[id] = rec;
+  api('GET', '/api/forecast/' + encodeURIComponent(id))
+    .then((d) => { S.fc[id] = d && d.error ? { status: 'err', data: null, at: Date.now() } : { status: 'ok', data: d, at: Date.now() }; })
+    .catch(() => { S.fc[id] = { status: rec.data ? 'ok' : 'err', data: rec.data, at: Date.now() }; })
+    .then(() => { if (S.tab === 'tide') render(); });
+  return rec;
+}
+function wxSym(c, night) {
+  if (c == null) return '–';
+  if (c <= 1) return night ? '☾' : '☀︎';
+  if (c === 2) return '⛅︎';
+  if (c === 3 || c === 45 || c === 48) return '☁︎';
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return '☂︎';
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return '❄︎';
+  if (c >= 95) return '⚡︎';
+  return '☁︎';
+}
+/* Smooth curve through JMA's hourly levels and exact high/low tides (cubic Hermite, flat at each extreme). */
+function tideCurve(td) {
+  const ex = td.highs.concat(td.lows);
+  const pts = new Map();
+  td.hourly.forEach((v, h) => { if (!ex.some((e) => Math.abs(e.m - h * 60) < 15)) pts.set(h * 60, { m: h * 60, v, x: false }); });
+  if (td.next0 != null && !ex.some((e) => Math.abs(e.m - 1440) < 15)) pts.set(1440, { m: 1440, v: td.next0, x: false });
+  ex.forEach((e) => pts.set(e.m, { m: e.m, v: e.h, x: true }));
+  const k = Array.from(pts.values()).sort((x, y) => x.m - y.m), n = k.length;
+  const sl = k.map((q, i) => (q.x ? 0 : i === 0 ? (k[1].v - q.v) / (k[1].m - q.m) : i === n - 1 ? (q.v - k[i - 1].v) / (q.m - k[i - 1].m) : (k[i + 1].v - k[i - 1].v) / (k[i + 1].m - k[i - 1].m)));
+  return (m) => {
+    if (m <= k[0].m) return k[0].v;
+    if (m >= k[n - 1].m) return k[n - 1].v;
+    let i = 0; while (k[i + 1].m < m) i++;
+    const a = k[i], b = k[i + 1], d = b.m - a.m, t = (m - a.m) / d, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * a.v + (t3 - 2 * t2 + t) * d * sl[i] + (-2 * t3 + 3 * t2) * b.v + (t3 - t2) * d * sl[i + 1];
+  };
+}
+function liveDay(sp, live, off) {
+  const date = new Date(Date.now() + JST + off * 864e5).toISOString().slice(0, 10);
+  const start = new Date(date + 'T00:00:00+09:00'), ms0 = start.getTime();
+  const sample = TD.dayData(sp, off);
+  const td = live.tide && live.tide.days && live.tide.days.find((x) => x.date === date);
+  const wd = live.weather && live.weather.days.find((x) => x.date === date);
+  const sr = wd ? wd.sr : sample.sr, ss = wd ? wd.ss : sample.ss, wx = [];
+  for (let h = 0; h < 24; h++) {
+    if (!wd || wd.temp[h] == null) { wx.push({ t: null, w: null, d: null, g: '–' }); continue; }
+    const night = h * 60 + 30 < sr || h * 60 + 30 > ss;
+    wx.push({ t: wd.temp[h], w: wd.wind[h], d: wd.dir[h], g: wxSym(wd.code[h], night) });
+  }
+  const dd = { start, ms0, sr, ss, tn: TD.tideIdx(ms0 + 12 * 36e5), wx, tideOk: !!td, curve: [], ext: [], H: () => 0 };
+  if (td) {
+    dd.H = tideCurve(td);
+    dd.ext = td.highs.map((e) => ({ m: e.m, h: e.h, hi: true })).concat(td.lows.map((e) => ({ m: e.m, h: e.h, hi: false }))).sort((x, y) => x.m - y.m);
+    const ms = new Set(dd.ext.map((e) => e.m));
+    for (let m = 0; m <= 1440; m += 10) ms.add(m);
+    dd.curve = Array.from(ms).sort((x, y) => x - y).map((m) => [m, dd.H(m)]);
+  }
+  return dd;
+}
+const num0 = (v, f) => (v == null ? '–' : f(v));
+
 function tideView() {
-  const sp = spotOf(homeSpotId()), fresh = sp.type === 'f', dd = TD.dayData(sp, S.day);
+  const sp = spotOf(homeSpotId()), fresh = sp.type === 'f';
+  const fc = ensureForecast(sp.id), live = fc.status === 'ok' ? fc.data : null;
+  const mode = fc.status === 'loading' ? 'loading' : live ? 'live' : 'sample';
+  const dayDD = (off) => (live ? liveDay(sp, live, off) : TD.dayData(sp, off));
+  const dd = dayDD(S.day);
+  const weatherOnly = fresh || (mode === 'live' && !dd.tideOk);
   const isToday = S.day === 0, nowMin = (Date.now() - dd.ms0) / 6e4, curH = Math.floor(nowMin / 60);
   const W = 24 * CW, Hh = 240, top = 30, bot = 14;
-  const maxH = Math.max.apply(null, dd.curve.map((p) => p[1]));
-  const ymax = Math.max(100, Math.ceil((maxH + 25) / 50) * 50), step = ymax > 300 ? 100 : 50;
-  const X = (m) => m / 60 * CW, Y = (h) => Hh - bot - (h / ymax) * (Hh - top - bot);
+  const wsel = (v, k) => `<button data-act="water" data-v="${v}" aria-pressed="${S.water === v}">${esc(T(k))}</button>`;
+  const active = S.spots.filter((s) => s.active).length;
+  const head = `<div class="tide-head"><div class="stackv"><label>${esc(T('homespot'))}<select id="spot">${spotOpts(sp.id, { water: S.water })}</select></label>
+   <div class="seg" role="group" aria-label="${esc(T('waterLbl'))}">${wsel('all', 'waterAll')}${wsel('salt', 'waterSalt')}${wsel('fresh', 'waterFresh')}</div>
+   <span class="muted small">${esc(T('spotCount')(active, D.PREFS.length))}</span></div>
+   <div class="daynav"><button class="btn" data-act="dayprev" aria-label="${esc(T('prev'))}"${S.day === 0 ? ' disabled' : ''}>‹</button>
+   <div class="dlabel"><b>${esc(dateStr(dd.start, true))}</b><span>${isToday ? esc(T('today')) + ' · ' : ''}${fresh ? esc(T('tagFresh')) : esc(T('tn')[dd.tn])}</span></div>
+   <button class="btn" data-act="daynext" aria-label="${esc(T('next'))}"${S.day === 6 ? ' disabled' : ''}>›</button></div></div>`;
+  if (mode === 'loading') return `<section>${head}<div class="panel empty">${esc(T('fcLoading'))}</div></section>`;
+
   let svg = '';
-  if (!fresh) {
+  if (!weatherOnly) {
+    const maxH = Math.max.apply(null, dd.curve.map((p) => p[1]));
+    const ymax = Math.max(100, Math.ceil((maxH + 25) / 50) * 50), step = ymax > 300 ? 100 : 50;
+    const X = (m) => m / 60 * CW, Y = (h) => Hh - bot - (Math.max(0, h) / ymax) * (Hh - top - bot);
     svg = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${esc(T('tideLbl'))}">`;
     svg += `<rect class="c-night" x="0" y="0" width="${X(dd.sr)}" height="${Hh}"/><rect class="c-night" x="${X(dd.ss)}" y="0" width="${W - X(dd.ss)}" height="${Hh}"/>`;
     for (let i = 1; i < 24; i++) svg += `<line class="c-hr" x1="${i * CW}" x2="${i * CW}" y1="0" y2="${Hh}"/>`;
@@ -262,49 +341,51 @@ function tideView() {
   }
   const cells = [[], [], [], []];
   dd.wx.forEach((w, h) => {
-    const cur = isToday && h === curH ? ' cur' : '', strong = w.w >= 8 ? ' strong' : '';
+    const cur = isToday && h === curH ? ' cur' : '', strong = w.w != null && w.w >= 8 ? ' strong' : '';
     cells[0].push(`<div class="hh${cur}">${pad(h)}</div>`);
     cells[1].push(`<div class="${cur.trim()}">${w.g}</div>`);
-    cells[2].push(`<div class="num${cur}">${Math.round(w.t)}°</div>`);
-    cells[3].push(`<div class="num${cur}${strong}" title="${Math.round(w.d)}°">${windArrow(w.d)}${Math.round(w.w)}</div>`);
+    cells[2].push(`<div class="num${cur}">${num0(w.t, (v) => Math.round(v) + '°')}</div>`);
+    cells[3].push(`<div class="num${cur}${strong}"${w.d != null ? ` title="${Math.round(w.d)}°"` : ''}>${w.w == null ? '–' : windArrow(w.d) + Math.round(w.w)}</div>`);
   });
   const hrs = cells.map((c) => `<div class="hrs">${c.join('')}</div>`).join('');
-  const maxW = Math.max.apply(null, dd.wx.map((w) => w.w));
+  const ws = dd.wx.filter((w) => w.w != null).map((w) => w.w), maxW = ws.length ? Math.max.apply(null, ws) : null;
   const wn = dd.wx[Math.min(23, Math.max(0, curH))];
   let stats = '';
   const stat = (label, big, sub, warn) => `<div class="stat panel${warn ? ' warn' : ''}"><small>${esc(label)}</small><b class="num">${big}</b><span>${sub}</span></div>`;
-  if (fresh) {
-    if (isToday) stats += stat(T('now'), Math.round(wn.t) + '°C', wn.g) + stat(T('wind'), wn.w.toFixed(1) + ' m/s', esc(T('now')));
+  const tC = (w) => num0(w.t, (v) => Math.round(v) + '°C'), wm = (w) => num0(w.w, (v) => v.toFixed(1) + ' m/s');
+  if (weatherOnly) {
+    if (isToday) stats += stat(T('now'), tC(wn), wn.g) + stat(T('wind'), wm(wn), esc(T('now')));
     stats += stat(T('sunrise'), fmt(dd.sr), esc(T('sunset')) + ' ' + fmt(dd.ss));
   } else {
     const his = dd.ext.filter((e) => e.hi).map((e) => fmt(e.m)).join(' / '), los = dd.ext.filter((e) => !e.hi).map((e) => fmt(e.m)).join(' / ');
     if (isToday) {
       const rising = dd.H(nowMin + 10) > dd.H(nowMin - 10);
-      stats += stat(T('now'), Math.round(dd.H(nowMin)) + ' cm', (rising ? '↑ ' + T('rising') : '↓ ' + T('falling')) + ' · ' + Math.round(wn.t) + '°C') + stat(T('wind'), wn.w.toFixed(1) + ' m/s', esc(T('now')));
+      stats += stat(T('now'), Math.round(dd.H(nowMin)) + ' cm', (rising ? '↑ ' + T('rising') : '↓ ' + T('falling')) + (wn.t == null ? '' : ' · ' + tC(wn))) + stat(T('wind'), wm(wn), esc(T('now')));
     }
     stats += stat(T('high'), his || '-', esc(T('tn')[dd.tn])) + stat(T('low'), los || '-', esc(T('sunrise')) + ' ' + fmt(dd.sr) + ' · ' + esc(T('sunset')) + ' ' + fmt(dd.ss));
   }
-  stats += stat(T('maxWind'), maxW.toFixed(1) + ' m/s', maxW >= 8 ? esc(T('windWarn')) : '&nbsp;', maxW >= 8);
+  stats += stat(T('maxWind'), maxW == null ? '–' : maxW.toFixed(1) + ' m/s', maxW != null && maxW >= 8 ? esc(T('windWarn')) : '&nbsp;', maxW != null && maxW >= 8);
   let week = '';
   for (let i = 0; i < 7; i++) {
-    const d2 = TD.dayData(sp, i);
+    const d2 = dayDD(i);
     let l2, l3;
-    if (fresh) { const ts = d2.wx.map((w) => w.t); l2 = d2.wx[12].g; l3 = Math.round(Math.max.apply(null, ts)) + '° / ' + Math.round(Math.min.apply(null, ts)) + '°'; }
-    else { const hs = d2.ext.filter((e) => e.hi); l2 = T('tn')[d2.tn]; l3 = (hs.length ? Math.round(Math.max.apply(null, hs.map((e) => e.h))) : '-') + ' cm'; }
+    if (weatherOnly) {
+      const ts = d2.wx.filter((w) => w.t != null).map((w) => w.t);
+      l2 = d2.wx[12].g; l3 = ts.length ? Math.round(Math.max.apply(null, ts)) + '° / ' + Math.round(Math.min.apply(null, ts)) + '°' : '–';
+    } else { const hs = d2.ext.filter((e) => e.hi); l2 = T('tn')[d2.tn]; l3 = (hs.length ? Math.round(Math.max.apply(null, hs.map((e) => e.h))) : '-') + ' cm'; }
     week += `<button data-act="day" data-v="${i}" aria-pressed="${i === S.day}"><b>${esc(i === 0 ? T('today') : dateStr(d2.start))}</b><span>${esc(l2)}</span><span class="num">${esc(l3)}</span></button>`;
   }
-  const wsel = (v, k) => `<button data-act="water" data-v="${v}" aria-pressed="${S.water === v}">${esc(T(k))}</button>`;
-  const active = S.spots.filter((s) => s.active).length;
-  return `<section><div class="tide-head"><div class="stackv"><label>${esc(T('homespot'))}<select id="spot">${spotOpts(sp.id, { water: S.water })}</select></label>
-   <div class="seg" role="group" aria-label="${esc(T('waterLbl'))}">${wsel('all', 'waterAll')}${wsel('salt', 'waterSalt')}${wsel('fresh', 'waterFresh')}</div>
-   <span class="muted small">${esc(T('spotCount')(active, D.PREFS.length))}</span></div>
-   <div class="daynav"><button class="btn" data-act="dayprev" aria-label="${esc(T('prev'))}"${S.day === 0 ? ' disabled' : ''}>‹</button>
-   <div class="dlabel"><b>${esc(dateStr(dd.start, true))}</b><span>${isToday ? esc(T('today')) + ' · ' : ''}${fresh ? esc(T('tagFresh')) : esc(T('tn')[dd.tn])}</span></div>
-   <button class="btn" data-act="daynext" aria-label="${esc(T('next'))}"${S.day === 6 ? ' disabled' : ''}>›</button></div></div>
-   <div class="stats">${stats}</div>${fresh ? `<p class="muted small" style="margin-bottom:10px">${esc(T('noTide'))}</p>` : ''}
-   <div class="panel chartpanel"><div class="keys">${fresh ? '' : '<div class="k0">cm</div>'}<div>${esc(T('hour'))}</div><div>${esc(T('wx'))}</div><div>${esc(T('temp'))}</div><div>${esc(T('wind'))} m/s</div></div>
-   <div class="scroller" id="scroller" tabindex="0" aria-label="${esc(T(fresh ? 'wx' : 'tideLbl'))}"><div class="chartcol">${svg}${hrs}</div></div></div>
-   <div class="week">${week}</div><p class="sample">${esc(fresh ? T('permitNote') : T('sampleNote'))}</p></section>`;
+  let note;
+  if (mode === 'sample') note = `<span class="err">${esc(T('fcSample'))}</span>`;
+  else {
+    const st = live.tide && live.tide.station;
+    note = esc(fresh ? T('fcSrcWx') : T('fcSrc')(st ? st.name : '', st ? st.km : 0)) + (fresh ? ' ' + esc(T('permitNote')) : '');
+  }
+  const top1 = weatherOnly ? `<p class="muted small" style="margin-bottom:10px">${esc(fresh ? T('noTide') : mode === 'live' ? T('fcNoTide') : '')}</p>` : '';
+  return `<section>${head}<div class="stats">${stats}</div>${top1}
+   <div class="panel chartpanel"><div class="keys">${weatherOnly ? '' : '<div class="k0">cm</div>'}<div>${esc(T('hour'))}</div><div>${esc(T('wx'))}</div><div>${esc(T('temp'))}</div><div>${esc(T('wind'))} m/s</div></div>
+   <div class="scroller" id="scroller" tabindex="0" aria-label="${esc(T(weatherOnly ? 'wx' : 'tideLbl'))}"><div class="chartcol">${svg}${hrs}</div></div></div>
+   <div class="week">${week}</div><p class="sample">${note}</p></section>`;
 }
 
 /* ---------- board ---------- */
@@ -677,6 +758,7 @@ function spotSheet() {
    <div class="two"><label class="f">${esc(T('nameEn'))}<input type="text" id="s-en" required minlength="2" maxlength="60" value="${s ? esc(s.en) : ''}"></label><label class="f">${esc(T('nameJa'))}<input type="text" id="s-ja" required maxlength="60" value="${s ? esc(s.ja) : ''}"></label></div>
    <div class="two"><label class="f">${esc(T('prefLbl'))}<select id="s-pref">${pref}</select></label><label class="f">${esc(T('typeLbl'))}<select id="s-type">${type}</select></label></div>
    ${s ? `<p class="muted small">ID: ${esc(s.id)}</p>` : `<label class="f">${esc(T('spotId'))}<input type="text" id="s-id" maxlength="40" pattern="[a-z0-9][a-z0-9\\-]{1,39}"><span class="hint">${esc(T('spotIdHint'))}</span></label>`}
+   <div class="two"><label class="f">${esc(T('latLbl'))}<input type="number" id="s-lat" required step="0.0001" min="20" max="46" value="${s && s.lat != null ? s.lat : ''}"></label><label class="f">${esc(T('lngLbl'))}<input type="number" id="s-lng" required step="0.0001" min="122" max="154" value="${s && s.lng != null ? s.lng : ''}"></label></div>
    <p class="small muted">${esc(T('spotTideNote'))}</p><p class="err" id="spot-err" role="alert"></p>${btnRow('closesheet', T('save'))}</form>`);
 }
 function feedbackSheet() {
@@ -924,7 +1006,7 @@ const FORMS = {
     api('POST', '/api/feedback', { kind, text: val('fb-text').trim(), page: S.tab, lang: S.lang }).then(() => load().then(() => { toast(T('feedbackThanks')); S.sheet = { k: 'feedback' }; render(); })).catch((e) => setErr('fb-err', e));
   },
   spot(f) {
-    const body = { en: val('s-en').trim(), ja: val('s-ja').trim(), pref: val('s-pref'), type: val('s-type') };
+    const body = { en: val('s-en').trim(), ja: val('s-ja').trim(), pref: val('s-pref'), type: val('s-type'), lat: parseFloat(val('s-lat')), lng: parseFloat(val('s-lng')) };
     const id = f.dataset.id;
     let p;
     if (id) p = api('PATCH', '/api/admin/spots/' + id, body);

@@ -1,6 +1,5 @@
-/* Sample tide, sun and weather model used for the home page.
-   These numbers are generated for each spot and day. They are NOT real forecasts.
-   Replace dayData() with a call to a real tide-table and weather provider when you are ready. */
+/* Sample tide, sun and weather model. FALLBACK ONLY: the home page uses it when the live forecast (JMA tide + Open-Meteo,
+   served by /api/forecast/:spot) cannot be loaded, and says so on screen. tideIdx() (spring/neap name from the moon's age) is real astronomy. */
 (function () {
   'use strict';
   var D = window.CAST;
@@ -53,5 +52,5 @@
     var s = sunTimes(start);
     return { start: start, ms0: ms0, H: H, curve: curve, ext: ext, sr: s.sr, ss: s.ss, tn: tideIdx(ms0 + 12 * 36e5), wx: weather(sp, start) };
   }
-  window.TIDE = { dayAt: dayAt, today0: today0, dayData: dayData, pad: pad };
+  window.TIDE = { dayAt: dayAt, today0: today0, dayData: dayData, tideIdx: tideIdx, pad: pad };
 })();

@@ -7,9 +7,38 @@ const path = require('node:path');
 
 process.env.ADMIN_SETUP_CODE = 'correct-horse-battery-staple';
 const { createApp } = require('./server.js');
+const { parseJma, nearestStation } = require('./marine.js');
+
+/* Fake JMA and Open-Meteo servers, in the documented formats, so tests never touch the internet. */
+const mock = { calls: [], fail: false };
+function jmaFile(year) {
+  const lines = [];
+  for (let d = new Date(Date.UTC(year, 0, 1)); d.getUTCFullYear() === year; d = new Date(d.getTime() + 86400000)) {
+    const hourly = Array.from({ length: 24 }, (_, h) => String(Math.round(120 + 50 * Math.sin((h + d.getUTCDate()) / 12 * Math.PI))).padStart(3));
+    const date = String(year % 100).padStart(2) + String(d.getUTCMonth() + 1).padStart(2) + String(d.getUTCDate()).padStart(2);
+    lines.push(hourly.join('') + date + 'NG' + '1034163' + '9999999'.repeat(3) + '0421095' + '9999999'.repeat(3));
+  }
+  return lines.join('\n') + '\n';
+}
+function weatherJson(url) {
+  const base = Date.now() + 9 * 3600000, time = [], temp = [], code = [], wind = [], dir = [], dtime = [], sunrise = [], sunset = [];
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(base + i * 86400000).toISOString().slice(0, 10);
+    dtime.push(day); sunrise.push(day + 'T06:24'); sunset.push(day + 'T16:58');
+    for (let h = 0; h < 24; h++) { time.push(day + 'T' + String(h).padStart(2, '0') + ':00'); temp.push(10 + h / 4); code.push(h < 12 ? 0 : 61); wind.push(2 + h / 10); dir.push(h * 10); }
+  }
+  return JSON.stringify({ hourly: { time, temperature_2m: temp, weather_code: code, wind_speed_10m: wind, wind_direction_10m: dir }, daily: { time: dtime, sunrise, sunset } });
+}
+async function fetchText(url) {
+  mock.calls.push(url);
+  if (mock.fail) throw new Error('network down');
+  if (url.startsWith('https://www.data.jma.go.jp/')) { const m = /txt\/(\d{4})\//.exec(url); return jmaFile(+m[1]); }
+  if (url.startsWith('https://api.open-meteo.com/')) return weatherJson(url);
+  throw new Error('unexpected url ' + url);
+}
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'castomo-'));
-const app = createApp({ dataDir: dir });
+const app = createApp({ dataDir: dir, fetchText });
 let base;
 test.before(async () => { await new Promise((ok) => app.server.listen(0, '127.0.0.1', ok)); base = 'http://127.0.0.1:' + app.server.address().port; });
 test.after(async () => { await app.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -86,13 +115,15 @@ test('owner manages the admin whitelist', async () => {
 });
 
 test('admin adds, edits and hides a spot', async () => {
-  const add = await bob('POST', '/api/admin/spots', { en: 'Test Pier', ja: 'テスト埠頭', type: 's', pref: 'aichi' });
+  const add = await bob('POST', '/api/admin/spots', { en: 'Test Pier', ja: 'テスト埠頭', type: 's', pref: 'aichi', lat: 34.9, lng: 136.9 });
   assert.equal(add.status, 200);
   const id = add.body.id;
   assert.equal(id, 'test-pier');
-  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Test Pier', ja: 'テスト埠頭', type: 's', pref: 'aichi' })).status, 409);
-  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Bad', ja: 'x', type: 'zzz', pref: 'aichi' })).status, 400);
-  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Bad', ja: 'x', type: 's', pref: 'nowhere' })).status, 400);
+  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Test Pier', ja: 'テスト埠頭', type: 's', pref: 'aichi', lat: 34.9, lng: 136.9 })).status, 409);
+  assert.equal((await bob('POST', '/api/admin/spots', { en: 'No Coords', ja: 'x', type: 's', pref: 'aichi' })).status, 400, 'coordinates are required');
+  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Abroad', ja: 'x', type: 's', pref: 'aichi', lat: 51.5, lng: -0.1 })).status, 400, 'must be in Japan');
+  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Bad', ja: 'x', type: 'zzz', pref: 'aichi', lat: 34.9, lng: 136.9 })).status, 400);
+  assert.equal((await bob('POST', '/api/admin/spots', { en: 'Bad', ja: 'x', type: 's', pref: 'nowhere', lat: 34.9, lng: 136.9 })).status, 400);
   let spots = (await carol('GET', '/api/spots')).body.spots;
   assert.ok(spots.find((s) => s.id === id && s.active));
   assert.equal((await carol('PATCH', '/api/me', { spot: id })).status, 200);
@@ -155,4 +186,61 @@ test('security headers and cookie flags', async () => {
   const sc = l.headers.get('set-cookie') || '';
   assert.match(sc, /HttpOnly/i);
   assert.match(sc, /SameSite=/i);
+});
+
+test('JMA parser reads the documented fixed-width format', () => {
+  const hourly = ['125', '120', '115', '110', '105', '100', ' 98', '100', '105', '115', '140', '160', '163', '160', '150', '140', '130', '125', '120', '118', '117', '116', '115', '115'].join('');
+  const line = hourly + '27 1 1' + 'TK' + '1034163' + '9999999'.repeat(3) + '0421095' + '9999999'.repeat(3);
+  assert.equal(line.length, 136);
+  const r = parseJma(line + '\n')['2027-01-01'];
+  assert.equal(r.hourly.length, 24);
+  assert.equal(r.hourly[0], 125);
+  assert.deepEqual(r.highs, [{ m: 10 * 60 + 34, h: 163 }]);
+  assert.deepEqual(r.lows, [{ m: 4 * 60 + 21, h: 95 }]);
+});
+
+test('nearest tide station', () => {
+  assert.equal(nearestStation(35.08, 136.88).code, 'NG');
+  assert.equal(nearestStation(34.69, 136.99, 'morozaki').km < 40, true);
+  assert.equal(nearestStation(35.5, 140.43, 'kujukuri').code, 'ZF', 'override for the Pacific coast');
+  assert.equal(nearestStation(40, 150), null, 'open ocean has no station');
+});
+
+test('forecast: live tide and weather for a saltwater spot', async () => {
+  const r = await carol('GET', '/api/forecast/nagoya');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.tide.station.code, 'NG');
+  assert.equal(r.body.tide.days.length, 7);
+  assert.equal(r.body.tide.days[0].hourly.length, 24);
+  assert.deepEqual(r.body.tide.days[0].highs[0], { m: 634, h: 163 });
+  assert.equal(r.body.weather.days.length, 7);
+  assert.equal(r.body.weather.days[0].temp.length, 24);
+  assert.equal(r.body.weather.days[0].sr, 6 * 60 + 24);
+  const before = mock.calls.length;
+  await carol('GET', '/api/forecast/nagoya');
+  assert.equal(mock.calls.length, before, 'second request is served from cache');
+});
+
+test('forecast: freshwater has weather only, unknown spot 404', async () => {
+  const r = await carol('GET', '/api/forecast/biwa-south');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.tide.na, 'freshwater');
+  assert.equal(r.body.weather.days.length, 7);
+  assert.equal((await carol('GET', '/api/forecast/nope')).status, 404);
+});
+
+test('forecast: upstream failure degrades gracefully', async () => {
+  mock.fail = true;
+  const r = await carol('GET', '/api/forecast/hakodate');
+  mock.fail = false;
+  assert.equal(r.status, 200);
+  assert.equal(r.body.tide.error, true);
+  assert.equal(r.body.weather, null);
+});
+
+test('admin can fix a spot\'s coordinates', async () => {
+  assert.equal((await bob('PATCH', '/api/admin/spots/nagoya', { lat: 99, lng: 136.9 })).status, 400);
+  assert.equal((await bob('PATCH', '/api/admin/spots/nagoya', { lat: 35.09, lng: 136.89 })).status, 200);
+  const s = (await carol('GET', '/api/spots')).body.spots.find((x) => x.id === 'nagoya');
+  assert.equal(s.lat, 35.09);
 });

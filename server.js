@@ -13,6 +13,7 @@ const { promisify } = require('node:util');
 const scrypt = promisify(crypto.scrypt);
 const D = require('./public/spots.js');
 const { openDb, tx } = require('./db.js');
+const { createForecaster } = require('./marine.js');
 
 const PREF_IDS = new Set(D.PREFS.map((p) => p.id));
 const REGION_IDS = new Set(D.REGIONS.map((r) => r.id));
@@ -89,6 +90,14 @@ function createApp(opts = {}) {
   const isAdmin = (u) => !!u && (u.role === 'admin' || u.role === 'owner');
   const isOwner = (u) => !!u && u.role === 'owner';
   const setupCode = String(process.env.ADMIN_SETUP_CODE || '');
+  const fetchText = opts.fetchText || (async (url, signal) => {
+    const r = await fetch(url, { signal, headers: { 'user-agent': 'Castomo/1.0 (angler community app)' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  });
+  const marine = createForecaster({ dataDir, fetchText, now: opts.now, log: (m) => console.warn('[forecast] ' + m) });
+  const validLat = (v) => typeof v === 'number' && v >= 20 && v <= 46;
+  const validLng = (v) => typeof v === 'number' && v >= 122 && v <= 154;
   let spotsRev = Date.now();
   function audit(user, action, target, detail) {
     q('INSERT INTO audit_log(actor,actor_nick,action,target,detail,created_at) VALUES(?,?,?,?,?,?)').run(user ? user.id : null, user ? user.nick : 'cli', action, String(target || '').slice(0, 80), String(detail || '').slice(0, 300), nowISO());
@@ -624,7 +633,7 @@ function createApp(opts = {}) {
     const used = {};
     for (const r of q('SELECT spot AS s, COUNT(*) AS n FROM users GROUP BY spot').all()) used[r.s] = (used[r.s] || 0) + r.n;
     for (const r of q("SELECT spot AS s, COUNT(*) AS n FROM posts WHERE spot<>'custom' GROUP BY spot").all()) used[r.s] = (used[r.s] || 0) + r.n;
-    const spots = q('SELECT * FROM spots ORDER BY pref, en').all().map((s) => ({ id: s.id, en: s.en, ja: s.ja, type: s.type, pref: s.pref, builtin: !!s.builtin, active: !!s.active, used: used[s.id] || 0 }));
+    const spots = q('SELECT * FROM spots ORDER BY pref, en').all().map((s) => ({ id: s.id, en: s.en, ja: s.ja, type: s.type, pref: s.pref, builtin: !!s.builtin, active: !!s.active, lat: s.lat, lng: s.lng, used: used[s.id] || 0 }));
     const feedback = q('SELECT f.*, u.nick FROM feedback f LEFT JOIN users u ON u.id=f.user_id ORDER BY f.created_at DESC LIMIT 300').all()
       .map((f) => ({ id: f.id, kind: f.kind, text: f.text, page: f.page, lang: f.lang, status: f.status, note: f.note, created_at: f.created_at, updated_at: f.updated_at, uid: f.user_id || '', nick: f.nick || '' }));
     return {
@@ -646,13 +655,15 @@ function createApp(opts = {}) {
     const en = str(b.en, { min: 2, max: 60, name: 'en' }), ja = str(b.ja, { min: 1, max: 60, name: 'ja' });
     if (!['s', 'b', 'f'].includes(b.type)) throw bad('invalid_type');
     if (!PREF_IDS.has(b.pref)) throw bad('invalid_pref');
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!validLat(lat) || !validLng(lng)) throw bad('invalid_coords');
     const id = b.id ? str(b.id, { min: 2, max: 40, name: 'id' }) : slug(en);
     if (!/^[a-z0-9][a-z0-9-]{1,39}$/.test(id) || id === 'custom') throw bad('invalid_id');
     if (q('SELECT 1 FROM spots WHERE id=?').get(id)) throw new HttpError(409, 'id_taken');
     /* Tide numbers for a new spot start from a neighbour in the same prefecture. They are sample values, as for built-in spots. */
     const nb = q('SELECT mean,a,p,p2,p3 FROM spots WHERE pref=? AND type<>? ORDER BY builtin DESC, id LIMIT 1').get(b.pref, 'f') || q('SELECT mean,a,p,p2,p3 FROM spots LIMIT 1').get();
     const off = (D.hash(id) % 100) / 250;
-    q('INSERT INTO spots(id,en,ja,type,pref,mean,a,p,p2,p3,builtin,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,1,?)').run(id, en, ja, b.type, b.pref, nb.mean, nb.a, nb.p + off, nb.p2 + off, nb.p3 + off, nowISO());
+    q('INSERT INTO spots(id,en,ja,type,pref,mean,a,p,p2,p3,lat,lng,builtin,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,1,?)').run(id, en, ja, b.type, b.pref, nb.mean, nb.a, nb.p + off, nb.p2 + off, nb.p3 + off, lat, lng, nowISO());
     audit(user, 'spot.add', id, en + ' / ' + ja);
     spotsRev = Date.now();
     broadcast();
@@ -668,6 +679,11 @@ function createApp(opts = {}) {
     if ('ja' in b) set.ja = str(b.ja, { min: 1, max: 60, name: 'ja' });
     if ('type' in b) { if (!['s', 'b', 'f'].includes(b.type)) throw bad('invalid_type'); set.type = b.type; }
     if ('pref' in b) { if (!PREF_IDS.has(b.pref)) throw bad('invalid_pref'); set.pref = b.pref; }
+    if ('lat' in b || 'lng' in b) {
+      const lat = Number('lat' in b ? b.lat : s.lat), lng = Number('lng' in b ? b.lng : s.lng);
+      if (!validLat(lat) || !validLng(lng)) throw bad('invalid_coords');
+      set.lat = lat; set.lng = lng;
+    }
     if ('active' in b) set.active = b.active ? 1 : 0;
     const keys = Object.keys(set);
     if (keys.length) {
@@ -721,7 +737,15 @@ function createApp(opts = {}) {
     return {};
   });
 
-  route('GET', '/api/spots', () => ({ rev: spotsRev, spots: q('SELECT id,en,ja,type,pref,mean,a,p,p2,p3,active FROM spots ORDER BY pref, en').all().map((s) => ({ ...s, active: !!s.active })) }));
+  route('GET', '/api/spots', () => ({ rev: spotsRev, spots: q('SELECT id,en,ja,type,pref,mean,a,p,p2,p3,lat,lng,active FROM spots ORDER BY pref, en').all().map((s) => ({ ...s, active: !!s.active })) }));
+
+  /* Live tide (JMA) and weather (Open-Meteo) for one spot. Public data; cached on the server. */
+  route('GET', '/api/forecast/:id', async (c) => {
+    limit('fc:' + c.ip, 120, 600000);
+    const s = q('SELECT id,type,lat,lng FROM spots WHERE id=?').get(c.params.id);
+    if (!s) throw new HttpError(404, 'not_found');
+    return marine.forecast(s);
+  });
 
   route('GET', '/api/events', (c) => {
     c.res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });

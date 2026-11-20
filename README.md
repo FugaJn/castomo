@@ -37,6 +37,11 @@ Other CLI: `node admin.js list`, `node admin.js revoke <nickname>`. Every admin 
 
     npm test
 
-## Notes
+## Tide and weather data
 
-Tide, wind and weather values are generated sample data (`public/tide.js`), not real forecasts. Plug in a real source (for example the Japan Meteorological Agency or a marine weather API) before launch.
+- **Tide:** official Japan Meteorological Agency (JMA) tide-table predictions for the nearest of 239 JMA stations (hourly levels plus exact high/low times), downloaded once per year per station and cached in `DATA_DIR/cache`.
+- **Weather, wind, sunrise/sunset:** Open-Meteo (free, no API key), cached 30 minutes.
+- Each spot has coordinates (editable in Admin > Spots; required for new spots). Freshwater spots show weather only.
+- Tide is a prediction for the nearest station, not your exact spot, and does not include weather effects (storm surge, pressure). The home page names the station and distance.
+- If the data cannot be loaded, the page says so and shows clearly labelled SAMPLE numbers instead.
+- Check it works from your server: open `https://YOUR-SITE/api/forecast/nagoya` and look for `"station":{"code":"NG"...}` and 7 days of data. Server logs print `[forecast] ...` lines if JMA or Open-Meteo cannot be reached.

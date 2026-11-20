@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const D = require('./public/spots.js');
+const COORDS = require('./coords.js');
 
 const SCHEMA_V1 = `
 CREATE TABLE users(
@@ -195,7 +196,12 @@ function openDb(file) {
   const v = db.prepare('PRAGMA user_version').get().user_version;
   if (v < 1) tx(db, () => { db.exec(SCHEMA_V1); db.exec('PRAGMA user_version=1'); });
   if (v < 2) tx(db, () => { db.exec(SCHEMA_V2); db.exec('PRAGMA user_version=2'); });
+  /* v3: coordinates per spot, used for live tide (nearest JMA station) and weather */
+  if (v < 3) tx(db, () => { db.exec('ALTER TABLE spots ADD COLUMN lat REAL; ALTER TABLE spots ADD COLUMN lng REAL; PRAGMA user_version=3'); });
   seedSpots(db);
+  /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
+  const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');
+  tx(db, () => { for (const id of Object.keys(COORDS)) fill.run(COORDS[id][0], COORDS[id][1], id); });
   return db;
 }
 
