@@ -26,7 +26,7 @@ const S = {
   room: 'all', q: '', fs: 'all', ft: 'all', aScope: 'all',
   group: null, openC: {},
   sheet: null, dirty: false,
-  data: null, spots: [], spotsRev: 0, sig: '', fc: {}, mapSel: null, mapQ: '', mapWater: 'all', pinMode: false,
+  data: null, spots: [], spotsRev: 0, sig: '', fc: {}, mapSel: null, repFilter: 'open', mapQ: '', mapWater: 'all', pinMode: false,
   loaded: false, loadError: false, rendered: false,
   admin: null, adminTab: 'overview', fbFilter: 'all', spotQ: '', spotPref: 'all',
   photo: null, readSent: {}, focusId: null
@@ -230,7 +230,7 @@ function tabs() {
     let n = 0;
     if (k === 'chat') n = unreadTotal();
     if (k === 'anglers') n = friends().incoming.length;
-    if (k === 'admin' && S.admin) n = S.admin.counts.feedbackNew;
+    if (k === 'admin' && S.admin) n = S.admin.counts.feedbackNew + (S.admin.counts.reportsOpen || 0);
     return n ? `<span class="dot" aria-label="${n}">${n > 99 ? '99+' : n}</span>` : '';
   };
   return `<nav class="tabs" aria-label="Sections">${list.map((k) => `<button data-act="tab" data-v="${k}"${S.tab === k ? ' aria-current="page"' : ''}>${esc(T(k))}${badge(k)}</button>`).join('')}</nav>`;
@@ -420,7 +420,7 @@ function postCard(x) {
   } else if (member) action = `<div class="row"><span class="pill good">${esc(T('youIn'))}</span>${chatBtn}</div>`;
   else if (pend) action = `<div class="row"><span class="pill">${esc(T('requested'))}</span><button class="btn sm" data-act="cancelreq" data-p="${p.id}">${esc(T('cancelReq'))}</button></div>`;
   else action = `<div><button class="btn primary" data-act="join" data-p="${p.id}">${esc(T('requestJoin'))}</button></div>`;
-  const mod = isAdmin() && !mine ? `<div><button class="btn sm warn" data-act="delpost" data-p="${p.id}" data-admin="1">${esc(T('adminRemove'))}</button></div>` : '';
+  const mod = isAdmin() && !mine ? `<div><button class="btn sm warn" data-act="delpost" data-p="${p.id}" data-admin="1">${esc(T('adminRemove'))}</button></div>` : !mine ? `<div>${reportBtn('post', p.id)}</div>` : '';
   return `<article class="panel post"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><div class="when num">${esc(dateStr(parseD(p.date), true))} · ${esc(p.time)}</div><h3>${esc(postSpot(p))} · ${esc(fName(p.fish))}</h3></div>${tp}</div>
    <div class="tags">${feedBadges(x.info)}</div>
    <div class="facts"><div><span class="k">${esc(T('host'))}</span><span class="row" style="gap:8px">${av(host)}${profLink(host)}</span></div>
@@ -459,7 +459,7 @@ function catchCard(x, detail) {
   const img = c.photo ? `<img class="photo" alt="${esc(fName(c.fish))}" src="${esc(c.photo)}" loading="lazy">` : ph(c);
   const cm = c.comments.map((m) => {
     const cu = userOf(m.u), canDel = m.u === myId() || mine || isAdmin();
-    return `<div class="cm">${av(cu)}<div><b>${profLink(cu)}</b><time>${esc(timeStr(m.t))}</time>${canDel ? ` <button class="linkbtn small muted" data-act="delcomment" data-id="${esc(m.id)}">${esc(T('del'))}</button>` : ''}<p>${esc(m.x)}</p></div></div>`;
+    return `<div class="cm">${av(cu)}<div><b>${profLink(cu)}</b><time>${esc(timeStr(m.t))}</time>${canDel ? ` <button class="linkbtn small muted" data-act="delcomment" data-id="${esc(m.id)}">${esc(T('del'))}</button>` : ''}${m.u !== myId() && !isAdmin() ? ' ' + reportBtn('comment', m.id) : ''}<p>${esc(m.x)}</p></div></div>`;
   }).join('');
   const pin = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>';
   const heart = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg>';
@@ -469,7 +469,7 @@ function catchCard(x, detail) {
    ${c.cap ? `<p>${esc(c.cap)}</p>` : ''}${tackle}
    <div class="actions"><button class="like" data-act="like" data-c="${c.id}" aria-pressed="${liked}" aria-label="${esc(T('likeLbl'))}">${heart}<span class="num">${c.likes.length}</span></button>
    ${detail === true ? `<b class="small">${esc(T('commentsN')(c.comments.length))}</b>` : `<button class="btn sm" data-act="togglec" data-c="${c.id}" aria-expanded="${open}">${esc(T('commentsN')(c.comments.length))}</button>`}
-   ${mine ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}">${esc(T('del'))}</button>` : isAdmin() ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}" data-admin="1">${esc(T('adminRemove'))}</button>` : ''}</div>
+   ${!mine && !isAdmin() ? reportBtn('catch', c.id) : ''}${mine ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}">${esc(T('del'))}</button>` : isAdmin() ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}" data-admin="1">${esc(T('adminRemove'))}</button>` : ''}</div>
    ${open ? `<div class="comments">${cm}<form class="send" data-form="comment" data-c="${c.id}"><input type="text" id="cm-${c.id}" maxlength="200" autocomplete="off" placeholder="${esc(T('addComment'))}" aria-label="${esc(T('addComment'))}"><button class="btn primary sm" type="submit">${esc(T('postBtn'))}</button></form></div>` : ''}</div></article>`;
 }
 function catchesView() {
@@ -767,17 +767,18 @@ function adminView() {
   if (!isAdmin()) return `<div class="panel empty">${esc(T('err_forbidden'))}</div>`;
   const a = S.admin;
   if (!a) return `<div class="panel empty">${esc(T('loading'))}</div>`;
-  const sub = ['overview', 'spots', 'feedback', 'admins', 'activity'];
-  const nav = `<div class="chips" style="margin-bottom:16px">${sub.map((k) => `<button class="chip" data-act="admintab" data-v="${k}" aria-pressed="${S.adminTab === k}">${esc(T('adm_' + k))}${k === 'feedback' && a.counts.feedbackNew ? `<i class="num">${a.counts.feedbackNew}</i>` : ''}</button>`).join('')}</div>`;
+  const sub = ['overview', 'reports', 'spots', 'feedback', 'admins', 'activity'];
+  const nav = `<div class="chips" style="margin-bottom:16px">${sub.map((k) => `<button class="chip" data-act="admintab" data-v="${k}" aria-pressed="${S.adminTab === k}">${esc(T('adm_' + k))}${k === 'feedback' && a.counts.feedbackNew ? `<i class="num">${a.counts.feedbackNew}</i>` : ''}${k === 'reports' && a.counts.reportsOpen ? `<i class="num">${a.counts.reportsOpen}</i>` : ''}</button>`).join('')}</div>`;
   let body = '';
   if (S.adminTab === 'overview') {
     const c = a.counts, tile = (k, v) => `<div class="stat panel"><small>${esc(T(k))}</small><b class="num">${v}</b></div>`;
-    body = `<div class="stats">${tile('st_users', c.users)}${tile('st_new7', c.newUsers7d)}${tile('st_posts', c.posts)}${tile('st_catches', c.catches)}${tile('st_groups', c.groups)}${tile('st_msgs', c.messages)}${tile('st_spots', c.spots)}${tile('st_fbnew', c.feedbackNew)}</div>
+    body = `<div class="stats">${tile('st_users', c.users)}${tile('st_new7', c.newUsers7d)}${tile('st_posts', c.posts)}${tile('st_catches', c.catches)}${tile('st_groups', c.groups)}${tile('st_msgs', c.messages)}${tile('st_spots', c.spots)}${tile('st_reports', c.reportsOpen)}${tile('st_fbnew', c.feedbackNew)}</div>
      <div class="panel pad"><b>${esc(T('adm_what'))}</b><p class="muted">${esc(T('adm_whatBody'))}</p><div class="row"><button class="btn primary" data-act="admintab" data-v="spots">${esc(T('adm_spots'))}</button><button class="btn" data-act="admintab" data-v="feedback">${esc(T('adm_feedback'))}</button></div></div>`;
   } else if (S.adminTab === 'spots') {
     const pref = `<option value="all">${esc(T('allPrefs'))}</option>` + D.PREFS.map((p) => `<option value="${p.id}"${S.spotPref === p.id ? ' selected' : ''}>${esc(p[S.lang])}</option>`).join('');
     body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><span class="row" style="gap:8px">${me() && me().owner ? `<button class="btn" data-act="importosm">${esc(T('importOsm'))}</button>` : ''}<button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></span></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))} ${esc(T('importNote'))}</p><div id="aspots">${spotTable()}</div>`;
-  } else if (S.adminTab === 'feedback') body = feedbackList();
+  } else if (S.adminTab === 'reports') body = reportsList();
+  else if (S.adminTab === 'feedback') body = feedbackList();
   else if (S.adminTab === 'admins') {
     const owner = !!me().owner;
     body = `<div class="panel pad"><b>${esc(T('whitelistTitle'))}</b><p class="muted">${esc(T('whitelistBody'))}</p>
@@ -900,14 +901,36 @@ function spotSheet() {
    <div class="two"><label class="f">${esc(T('latLbl'))}<input type="number" id="s-lat" required step="0.0001" min="20" max="46" value="${s && s.lat != null ? s.lat : ''}"></label><label class="f">${esc(T('lngLbl'))}<input type="number" id="s-lng" required step="0.0001" min="122" max="154" value="${s && s.lng != null ? s.lng : ''}"></label></div>
    <p class="small muted">${esc(T('spotTideNote'))}</p><p class="err" id="spot-err" role="alert"></p>${btnRow('closesheet', T('save'))}</form>`);
 }
+const reportBtn = (t, id) => `<button class="linkbtn small muted" data-act="report" data-t="${t}" data-id="${esc(id)}">⚑ ${esc(T('report'))}</button>`;
+function reportSheet() {
+  const reasons = ['spam', 'not_fishing', 'other'].map((r, i) => `<label><input type="radio" name="rr" value="${r}"${i === 0 ? ' checked' : ''}> ${esc(T('rs_' + r))}</label>`).join('');
+  return sheetWrap(`<h2>${esc(T('reportTitle'))}</h2><form data-form="report" data-t="${esc(S.sheet.t)}" data-id="${esc(S.sheet.id)}" style="display:grid;gap:12px">
+   <p class="muted small">${esc(T('reportWhy'))}</p><div class="opts">${reasons}</div>
+   <label class="f">${esc(T('reportNote'))}<textarea id="rp-note" maxlength="200"></textarea></label>
+   <p class="err" id="rp-err" role="alert"></p>${btnRow('closesheet', T('reportSend'))}</form>`);
+}
+function reportsList() {
+  const a = S.admin, open = a.reports.filter((r) => r.status === 'open'), done = a.reports.filter((r) => r.status !== 'open');
+  const list = S.repFilter === 'open' ? open : done;
+  const chips = [['open', 'rp_open', open.length], ['handled', 'rp_handled', done.length]].map((c) => `<button class="chip" data-act="repfilter" data-v="${c[0]}" aria-pressed="${S.repFilter === c[0]}">${esc(T(c[1]))}<i class="num">${c[2]}</i></button>`).join('');
+  const cards = list.map((r) => {
+    const sn = r.snap || {};
+    return `<article class="panel fbcard"><div class="row" style="gap:8px;justify-content:space-between"><span class="row" style="gap:8px"><span class="pill">${esc(T('rp_type_' + r.type))}</span><span class="pill ride">${esc(T('rs_' + r.reason))}</span>${r.status !== 'open' ? `<span class="pill good">${esc(T(r.status === 'removed' ? 'rp_removed' : 'rp_dismissed'))}</span>` : ''}</span><span class="muted small">${esc(timeStr(r.created_at))}</span></div>
+     <div class="small muted">${esc(T('rp_by'))} <b>${esc(r.reporter || '?')}</b> · ${esc(T('rp_author'))} <b>${esc(sn.nick || '?')}</b></div>
+     ${r.note ? `<p class="small"><i>“${esc(r.note)}”</i></p>` : ''}
+     <div class="fbmine">${sn.photo && r.live ? `<img class="prev" alt="" loading="lazy" src="${esc(sn.photo)}">` : sn.photo ? `<span class="muted small">${esc(T('rp_gone'))}</span>` : ''}<p class="fbtext">${esc(sn.text || '')}</p></div>
+     ${r.status === 'open' ? `<div class="row" style="justify-content:flex-end;gap:8px"><button class="btn sm" data-act="repact" data-id="${esc(r.id)}" data-a="dismiss">${esc(T('rp_dismiss'))}</button><button class="btn sm warn" data-act="repact" data-id="${esc(r.id)}" data-a="remove">${esc(T('rp_delete'))}</button></div>` : `<div class="muted small">${esc(r.handler || '')} · ${esc(r.handled_at ? timeStr(r.handled_at) : '')}</div>`}</article>`;
+  }).join('');
+  return `<div class="chips" style="margin-bottom:12px">${chips}</div>${cards || `<div class="panel empty">${esc(T('rp_none'))}</div>`}`;
+}
 const unreadCount = () => ((S.data && S.data.inbox) || []).filter((m) => !m.read_at).length;
 function inboxSheet() {
   const list = (S.data.inbox || []);
   const fresh = S.inboxNew || [];
   const body = list.length ? list.map((m) => `<article class="fbmine"${fresh.indexOf(m.id) > -1 ? ' style="border:1px solid var(--accent)"' : ''}>
     <div class="row" style="gap:8px"><span class="pill car">${esc(T('fromAdmin'))}</span><span class="muted small">${esc(timeStr(m.created_at))}</span></div>
-    <p class="fbtext">${esc(m.body)}</p>
-    ${m.ref_text ? `<p class="small muted">${esc(T('aboutYourFeedback'))}: ${esc(m.ref_text)}</p>` : ''}
+    <p class="fbtext">${esc(m.kind === 'moderation' ? T('modMsg')(m.body.split('|')[0], m.body.split('|')[1]) : m.body)}</p>
+    ${m.ref_text ? `<p class="small muted">${esc(T(m.kind === 'moderation' ? 'aboutYourContent' : 'aboutYourFeedback'))}: ${esc(m.ref_text)}</p>` : ''}
     <div class="row" style="justify-content:flex-end"><button class="linkbtn small" data-act="delinbox" data-id="${m.id}">${esc(T('del'))}</button></div></article>`).join('') : `<p class="muted">${esc(T('inboxEmpty'))}</p>`;
   return sheetWrap(`<h2>${esc(T('inboxTitle'))}</h2>${body}<div class="row" style="justify-content:flex-end"><button class="btn" data-act="closesheet">${esc(T('close'))}</button></div>`);
 }
@@ -932,6 +955,7 @@ function sheetHtml() {
     case 'feedback': return feedbackSheet();
     case 'inbox': return me() ? inboxSheet() : '';
     case 'pin': return me() ? pinSheet() : '';
+    case 'report': return me() ? reportSheet() : '';
     case 'catchview': return catchViewSheet();
   }
   return '';
@@ -1020,6 +1044,13 @@ const A = {
   account() { if (!needLogin()) return false; S.sheet = { k: 'account' }; },
   profile(el) { S.sheet = { k: 'profile', u: el.dataset.u }; },
   feedback() { if (!needLogin()) return false; S.sheet = { k: 'feedback' }; },
+  report(el) { if (!needLogin()) return false; S.sheet = { k: 'report', t: el.dataset.t, id: el.dataset.id }; },
+  repfilter(el) { S.repFilter = el.dataset.v; },
+  repact(el) {
+    if (el.dataset.a === 'remove' && !confirm(T('rp_confirm'))) return false;
+    api('POST', '/api/admin/reports/' + el.dataset.id, { action: el.dataset.a }).then(() => load().then(() => loadAdmin())).then(() => { toast(T('rp_done')); render(); }).catch(fail);
+    return false;
+  },
   mapsel(el) { S.mapSel = { t: el.dataset.t, id: el.dataset.id }; S.mapFly = true; },
   mapclear() { S.mapSel = null; },
   mapwater(el) { S.mapWater = el.dataset.v; },
@@ -1115,6 +1146,12 @@ document.addEventListener('input', (e) => {
 const val = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
 function setErr(id, e) { const el = document.getElementById(id); if (el) el.textContent = errText(e); }
 const FORMS = {
+  report(f) {
+    const r = f.querySelector('input[name=rr]:checked');
+    api('POST', '/api/reports', { type: f.dataset.t, id: f.dataset.id, reason: r ? r.value : 'spam', note: val('rp-note').trim() })
+      .then(() => { closeSheet(); toast(T('reportThanks')); render(); })
+      .catch((e) => setErr('rp-err', e));
+  },
   pin(f) {
     const body = { name: val('pn-name').trim(), note: val('pn-note').trim(), lat: parseFloat(val('pn-lat')), lng: parseFloat(val('pn-lng')) };
     const id = f.dataset.id;

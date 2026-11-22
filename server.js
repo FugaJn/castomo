@@ -402,12 +402,50 @@ function createApp(opts = {}) {
     broadcast();
     return { id };
   });
+  /* Removal helpers, shared by owners, admins and the reports queue. */
+  const removePost = (p) => { q('DELETE FROM posts WHERE id=?').run(p.id); q('DELETE FROM messages WHERE room=?').run('post-' + p.id); q('DELETE FROM reads WHERE room=?').run('post-' + p.id); };
+  const removeCatch = (r) => { q('DELETE FROM catches WHERE id=?').run(r.id); if (r.photo) fs.rm(path.join(uploadDir, r.photo), { force: true }, () => {}); };
+  const removeComment = (r) => { q('DELETE FROM catch_comments WHERE id=?').run(r.id); };
+  /* What a report points at: author, readable text, photo. Null if it no longer exists. */
+  function reportTarget(type, id) {
+    if (type === 'post') {
+      const p = q('SELECT p.*, u.nick FROM posts p JOIN users u ON u.id=p.host WHERE p.id=?').get(id);
+      return p ? { row: p, author: p.host, nick: p.nick, text: [p.custom, p.meet, p.note].filter(Boolean).join(' / ').slice(0, 300), photo: '' } : null;
+    }
+    if (type === 'catch') {
+      const r = q('SELECT c.*, u.nick FROM catches c JOIN users u ON u.id=c.by_user WHERE c.id=?').get(id);
+      return r ? { row: r, author: r.by_user, nick: r.nick, text: (r.fish + ' ' + r.cap).trim().slice(0, 300), photo: r.photo ? '/uploads/' + r.photo : '' } : null;
+    }
+    if (type === 'comment') {
+      const r = q('SELECT m.*, u.nick FROM catch_comments m JOIN users u ON u.id=m.user_id WHERE m.id=?').get(id);
+      return r ? { row: r, author: r.user_id, nick: r.nick, text: r.text.slice(0, 300), photo: '' } : null;
+    }
+    return null;
+  }
+
+  route('POST', '/api/reports', (c) => {
+    const user = needUser(c), b = c.body;
+    limit('rep:' + user.id, 30, 3600000);
+    if (!['post', 'catch', 'comment'].includes(b.type)) throw bad('invalid_type');
+    if (!['spam', 'not_fishing', 'other'].includes(b.reason)) throw bad('invalid_reason');
+    const id = typeof b.id === 'string' ? b.id : '';
+    const t = reportTarget(b.type, id);
+    if (!t) throw new HttpError(404, 'not_found');
+    if (t.author === user.id) throw bad('own_content');
+    if (q('SELECT 1 FROM reports WHERE reporter=? AND type=? AND target_id=?').get(user.id, b.type, id)) throw new HttpError(409, 'already_reported');
+    const note = str(b.note, { max: 200, name: 'note' });
+    q('INSERT INTO reports(id,reporter,type,target_id,reason,note,snapshot,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(rid(), user.id, b.type, id, b.reason, note, JSON.stringify({ nick: t.nick, text: t.text, photo: t.photo }), nowISO());
+    broadcast();
+    return {};
+  });
+
   route('DELETE', '/api/posts/:id', (c) => {
     const user = needUser(c), p = q('SELECT * FROM posts WHERE id=?').get(c.params.id);
     if (!p) throw new HttpError(404, 'not_found');
     if (p.host !== user.id && !isAdmin(user)) throw new HttpError(403, 'forbidden');
     if (p.host !== user.id) audit(user, 'post.delete', p.id, p.spot + ' ' + p.date);
-    tx(db, () => { q('DELETE FROM posts WHERE id=?').run(p.id); q('DELETE FROM messages WHERE room=?').run('post-' + p.id); q('DELETE FROM reads WHERE room=?').run('post-' + p.id); });
+    tx(db, () => removePost(p));
     broadcast();
     return {};
   });
@@ -493,8 +531,7 @@ function createApp(opts = {}) {
     if (!r) throw new HttpError(404, 'not_found');
     if (r.by_user !== user.id && !isAdmin(user)) throw new HttpError(403, 'forbidden');
     if (r.by_user !== user.id) audit(user, 'catch.delete', r.id, r.fish);
-    q('DELETE FROM catches WHERE id=?').run(r.id);
-    if (r.photo) fs.rm(path.join(uploadDir, r.photo), { force: true }, () => {});
+    removeCatch(r);
     broadcast();
     return {};
   });
@@ -523,7 +560,7 @@ function createApp(opts = {}) {
     const owner = q('SELECT by_user FROM catches WHERE id=?').get(r.catch_id);
     if (r.user_id !== user.id && (!owner || owner.by_user !== user.id) && !isAdmin(user)) throw new HttpError(403, 'forbidden');
     if (r.user_id !== user.id && !(owner && owner.by_user === user.id)) audit(user, 'comment.delete', r.id, r.text.slice(0, 80));
-    q('DELETE FROM catch_comments WHERE id=?').run(r.id);
+    removeComment(r);
     broadcast();
     return {};
   });
@@ -687,9 +724,11 @@ function createApp(opts = {}) {
       counts: {
         users: count('SELECT COUNT(*) AS n FROM users'), posts: q('SELECT COUNT(*) AS n FROM posts WHERE date>=?').get(dayStr(0)).n,
         catches: count('SELECT COUNT(*) AS n FROM catches'), groups: count('SELECT COUNT(*) AS n FROM groups'), messages: count('SELECT COUNT(*) AS n FROM messages'),
-        spots: count('SELECT COUNT(*) AS n FROM spots WHERE active=1'), feedbackNew: count("SELECT COUNT(*) AS n FROM feedback WHERE status='new'"),
+        spots: count('SELECT COUNT(*) AS n FROM spots WHERE active=1'), reportsOpen: count("SELECT COUNT(*) AS n FROM reports WHERE status='open'"), feedbackNew: count("SELECT COUNT(*) AS n FROM feedback WHERE status='new'"),
         newUsers7d: q('SELECT COUNT(*) AS n FROM users WHERE created_at>=?').get(new Date(Date.now() - 7 * 86400000).toISOString()).n
       },
+      reports: q("SELECT r.*, u.nick AS rnick, h.nick AS hnick FROM reports r LEFT JOIN users u ON u.id=r.reporter LEFT JOIN users h ON h.id=r.handled_by ORDER BY (r.status='open') DESC, r.created_at DESC LIMIT 200").all()
+        .map((r) => ({ id: r.id, type: r.type, target: r.target_id, reason: r.reason, note: r.note, status: r.status, created_at: r.created_at, handled_at: r.handled_at, reporter: r.rnick || '', handler: r.hnick || '', snap: JSON.parse(r.snapshot || '{}'), live: r.status === 'open' ? !!reportTarget(r.type, r.target_id) : false })),
       spots, feedback,
       admins: q("SELECT id,nick,role,created_at FROM users WHERE role IN ('admin','owner') ORDER BY role DESC, created_at").all(),
       audit: q('SELECT id,actor_nick,action,target,detail,created_at FROM audit_log ORDER BY id DESC LIMIT 60').all()
@@ -761,6 +800,32 @@ function createApp(opts = {}) {
     if (!f) throw new HttpError(404, 'not_found');
     q('DELETE FROM feedback WHERE id=?').run(f.id);
     audit(user, 'feedback.delete', f.id, '');
+    broadcast();
+    return {};
+  });
+
+  /* Handle a report: delete the reported content (the author is told in their inbox) or dismiss the report. */
+  route('POST', '/api/admin/reports/:id', (c) => {
+    const user = needAdmin(c), b = c.body;
+    const r = q('SELECT * FROM reports WHERE id=?').get(c.params.id);
+    if (!r) throw new HttpError(404, 'not_found');
+    if (r.status !== 'open') throw new HttpError(409, 'already_handled');
+    if (!['remove', 'dismiss'].includes(b.action)) throw bad('invalid_action');
+    const now = nowISO(), same = [r.type, r.target_id];
+    if (b.action === 'remove') {
+      const t = reportTarget(r.type, r.target_id);
+      tx(db, () => {
+        if (t) {
+          if (r.type === 'post') removePost(t.row); else if (r.type === 'catch') removeCatch(t.row); else removeComment(t.row);
+          if (t.author !== user.id) q('INSERT INTO inbox(user_id,kind,body,ref_text,created_at) VALUES(?,?,?,?,?)').run(t.author, 'moderation', r.type + '|' + r.reason, t.text.slice(0, 200), now);
+        }
+        q("UPDATE reports SET status='removed', handled_by=?, handled_at=? WHERE type=? AND target_id=? AND status='open'").run(user.id, now, ...same);
+      });
+      audit(user, 'report.remove', r.target_id, r.type + ' (' + r.reason + ')');
+    } else {
+      q("UPDATE reports SET status='dismissed', handled_by=?, handled_at=? WHERE type=? AND target_id=? AND status='open'").run(user.id, now, ...same);
+      audit(user, 'report.dismiss', r.target_id, r.type);
+    }
     broadcast();
     return {};
   });

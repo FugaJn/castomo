@@ -318,3 +318,60 @@ test('OpenStreetMap import: owner only, de-duplicates, classifies', async () => 
   assert.equal(again.body.added, 0, 'running it again adds nothing');
   assert.equal(spots.find((s) => s.id === 'osm-node-6'), undefined);
 });
+
+test('reports: users flag spam, admins delete it, author is told', async () => {
+  // a spam post and a spam comment from carol, an off-topic catch from alice
+  const day = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  const post = await carol('POST', '/api/posts', { spot: 'nagoya', date: day, time: '07:00', fish: 'aji', meet: 'Buy cheap watches at spam.example', transport: 'transit', seats: 0, note: 'BUY NOW' });
+  assert.equal(post.status, 200, JSON.stringify(post.body));
+  const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDNooor1zwz/9k=';
+  const cat = await alice('POST', '/api/catches', { fish: 'aji', date: new Date().toISOString().slice(0, 10), size: 10, loc: { k: 'spot', v: 'nagoya' }, cap: 'my new car for sale', photo, tackle: {} });
+  assert.equal(cat.status, 200, JSON.stringify(cat.body));
+  const cm = await carol('POST', '/api/catches/' + cat.body.id + '/comments', { text: 'visit spam.example' });
+  assert.equal(cm.status, 200, JSON.stringify(cm.body));
+  const st = (await bob('GET', '/api/state')).body;
+  const commentId = st.catches.find((x) => x.id === cat.body.id).comments[0].id;
+
+  const rep = { reason: 'spam', note: 'ad' };
+  assert.equal((await client()('POST', '/api/reports', { ...rep, type: 'post', id: post.body.id })).status, 401);
+  assert.equal((await carol('POST', '/api/reports', { ...rep, type: 'post', id: post.body.id })).status, 400, 'cannot report your own');
+  assert.equal((await alice('POST', '/api/reports', { ...rep, type: 'bogus', id: post.body.id })).status, 400);
+  assert.equal((await alice('POST', '/api/reports', { type: 'post', id: post.body.id, reason: 'meh' })).status, 400);
+  assert.equal((await alice('POST', '/api/reports', { ...rep, type: 'post', id: 'nope' })).status, 404);
+  assert.equal((await alice('POST', '/api/reports', { ...rep, type: 'post', id: post.body.id })).status, 200);
+  assert.equal((await alice('POST', '/api/reports', { ...rep, type: 'post', id: post.body.id })).status, 409, 'one report per user per item');
+  assert.equal((await carol('POST', '/api/reports', { reason: 'not_fishing', type: 'catch', id: cat.body.id })).status, 200);
+  assert.equal((await alice('POST', '/api/reports', { ...rep, type: 'comment', id: commentId })).status, 200);
+
+  assert.equal((await carol('GET', '/api/admin/overview')).status, 403, 'regular users cannot see reports');
+  const ov = (await bob('GET', '/api/admin/overview')).body;
+  assert.equal(ov.counts.reportsOpen, 3);
+  const rp = ov.reports.find((r) => r.type === 'post');
+  assert.equal(rp.status, 'open'); assert.equal(rp.reporter, 'alice'); assert.equal(rp.snap.nick, 'carol'); assert.match(rp.snap.text, /spam\.example/); assert.equal(rp.live, true);
+  const rc = ov.reports.find((r) => r.type === 'catch');
+  assert.match(rc.snap.photo, /^\/uploads\//);
+
+  assert.equal((await carol('POST', '/api/admin/reports/' + rp.id, { action: 'remove' })).status, 403);
+  assert.equal((await bob('POST', '/api/admin/reports/' + rp.id, { action: 'nuke' })).status, 400);
+  assert.equal((await bob('POST', '/api/admin/reports/' + rp.id, { action: 'remove' })).status, 200);
+  assert.equal((await bob('POST', '/api/admin/reports/' + rp.id, { action: 'remove' })).status, 409, 'already handled');
+  assert.ok(!(await bob('GET', '/api/state')).body.posts.some((p) => p.id === post.body.id), 'post is gone');
+  const note = (await carol('GET', '/api/state')).body.inbox.find((m) => m.kind === 'moderation');
+  assert.ok(note, 'author is told');
+  assert.equal(note.body, 'post|spam');
+  assert.match(note.ref_text, /spam\.example/);
+
+  // remove the catch: photo file deleted too; its comment report becomes moot but stays open until handled
+  assert.equal((await bob('POST', '/api/admin/reports/' + rc.id, { action: 'remove' })).status, 200);
+  assert.ok(!(await bob('GET', '/api/state')).body.catches.some((x) => x.id === cat.body.id));
+  assert.equal((await fetch(base + rc.snap.photo)).status, 404, 'image file removed');
+  assert.ok((await alice('GET', '/api/state')).body.inbox.some((m) => m.kind === 'moderation' && m.body === 'catch|not_fishing'));
+
+  // dismiss the remaining report
+  const left = (await bob('GET', '/api/admin/overview')).body.reports.find((r) => r.status === 'open');
+  assert.ok(left);
+  assert.equal((await bob('POST', '/api/admin/reports/' + left.id, { action: 'dismiss' })).status, 200);
+  const fin = (await bob('GET', '/api/admin/overview')).body;
+  assert.equal(fin.counts.reportsOpen, 0);
+  assert.ok(fin.audit.some((a) => a.action === 'report.remove'));
+});

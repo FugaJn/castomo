@@ -229,6 +229,25 @@ function openDb(file) {
     CREATE INDEX pins_user ON pins(user_id);
     PRAGMA user_version=5`);
   });
+  /* v6: user reports of spam / off-topic content, handled by admins */
+  if (v < 6) tx(db, () => {
+    db.exec(`CREATE TABLE reports(
+      id TEXT PRIMARY KEY,
+      reporter TEXT REFERENCES users(id) ON DELETE SET NULL,
+      type TEXT NOT NULL CHECK(type IN ('post','catch','comment')),
+      target_id TEXT NOT NULL,
+      reason TEXT NOT NULL CHECK(reason IN ('spam','not_fishing','other')),
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','removed','dismissed')),
+      snapshot TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      handled_by TEXT,
+      handled_at TEXT
+    );
+    CREATE UNIQUE INDEX reports_once ON reports(reporter,type,target_id) WHERE reporter IS NOT NULL;
+    CREATE INDEX reports_status ON reports(status,created_at);
+    PRAGMA user_version=6`);
+  });
   seedSpots(db);
   /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
   const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');

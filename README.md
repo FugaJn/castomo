@@ -56,3 +56,14 @@ Any signed-in user can send a Bug / Idea / Other message (Feedback button). Admi
 - Tide is a prediction for the nearest station, not your exact spot, and does not include weather effects (storm surge, pressure). The home page names the station and distance.
 - If the data cannot be loaded, the page says so and shows clearly labelled SAMPLE numbers instead.
 - Check it works from your server: open `https://YOUR-SITE/api/forecast/nagoya` and look for `"station":{"code":"NG"...}` and 7 days of data. Server logs print `[forecast] ...` lines if JMA or Open-Meteo cannot be reached.
+
+## Reports and moderation
+
+Signed-in users see a **⚑ Report** link on other people's trip posts, catch photos and comments. They pick a reason (spam or advertising, not fishing related, other) and may add a note. Each user can report an item once, and not their own.
+
+Admins see the reports in **Admin → Reports** (the tab shows the number of open reports):
+
+- **Delete content** removes the post, the photo (including the file on disk) or the comment, closes every open report about it, and sends the author a message in their inbox saying an admin removed it and why.
+- **Dismiss report** keeps the content and closes the report.
+
+Every decision is written to the Activity log. Admins can still delete any post directly. Chat messages and banning users are not part of this. The database upgrades itself on start (schema v6).
