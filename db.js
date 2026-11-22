@@ -248,6 +248,27 @@ function openDb(file) {
     CREATE INDEX reports_status ON reports(status,created_at);
     PRAGMA user_version=6`);
   });
+  /* v7: places where anglers keep posting photos from, but that are not on the map yet (admin-only until approved) */
+  if (v < 7) tx(db, () => {
+    db.exec(`CREATE TABLE candidates(
+      id TEXT PRIMARY KEY,
+      lat REAL NOT NULL, lng REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'watching' CHECK(status IN ('watching','approved','rejected')),
+      spot_id TEXT,
+      created_at TEXT NOT NULL,
+      handled_by TEXT, handled_at TEXT
+    );
+    CREATE TABLE spot_hits(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cand_id TEXT NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      catch_id TEXT NOT NULL UNIQUE REFERENCES catches(id) ON DELETE CASCADE,
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+      lat REAL NOT NULL, lng REAL NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX hits_cand ON spot_hits(cand_id);
+    PRAGMA user_version=7`);
+  });
   seedSpots(db);
   /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
   const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');

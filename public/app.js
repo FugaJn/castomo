@@ -230,7 +230,7 @@ function tabs() {
     let n = 0;
     if (k === 'chat') n = unreadTotal();
     if (k === 'anglers') n = friends().incoming.length;
-    if (k === 'admin' && S.admin) n = S.admin.counts.feedbackNew + (S.admin.counts.reportsOpen || 0);
+    if (k === 'admin' && S.admin) n = S.admin.counts.feedbackNew + (S.admin.counts.reportsOpen || 0) + (S.admin.counts.candidatesReady || 0);
     return n ? `<span class="dot" aria-label="${n}">${n > 99 ? '99+' : n}</span>` : '';
   };
   return `<nav class="tabs" aria-label="Sections">${list.map((k) => `<button data-act="tab" data-v="${k}"${S.tab === k ? ' aria-current="page"' : ''}>${esc(T(k))}${badge(k)}</button>`).join('')}</nav>`;
@@ -484,7 +484,7 @@ function catchesView() {
 }
 
 /* ---------- map ---------- */
-const TYPE_COL = { s: '#0A7488', b: '#B9470F', f: '#23704A' };
+const TYPE_COL = { s: '#2F5D8C', b: '#B5702A', f: '#4F7F3F' };
 const M = { el: null, map: null, cluster: null, pinLayer: null, selLayer: null, sig: '', t: 0 };
 const myPins = () => (S.data && S.data.pins) || [];
 const mapLib = () => typeof L !== 'undefined' && !!L.markerClusterGroup;
@@ -569,7 +569,7 @@ function initMap() {
   M.map.on('moveend', () => { clearTimeout(M.t); M.t = setTimeout(() => { const box = $('#mapside'); if (box && S.tab === 'map' && !S.mapSel && !S.sheet && !(document.activeElement && document.activeElement.id === 'mapq')) box.innerHTML = mapSideHtml(); }, 350); });
 }
 function syncMarkers() {
-  const sig = [S.spotsRev, S.spots.length, S.lang, S.mapWater, JSON.stringify(myPins())].join('|');
+  const sig = [S.spotsRev, S.spots.length, S.lang, S.mapWater, JSON.stringify(myPins()), isAdmin() && S.admin && S.admin.candidates ? S.admin.candidates.map((c) => c.id + c.n).join() : ''].join('|');
   if (sig === M.sig) return;
   M.sig = sig;
   M.cluster.clearLayers(); M.pinLayer.clearLayers();
@@ -580,6 +580,12 @@ function syncMarkers() {
     return m;
   });
   M.cluster.addLayers(arr);
+  if (isAdmin() && S.admin && S.admin.candidates) S.admin.candidates.forEach((c) => {
+    const m = L.marker([c.lat, c.lng], { icon: L.divIcon({ className: 'candpin', html: '?', iconSize: [26, 26], iconAnchor: [13, 13] }), keyboard: true, title: T('ns_adminOnly') });
+    m.on('click', () => { S.tab = 'admin'; S.adminTab = 'newspots'; render(); });
+    m.bindTooltip(esc(T('ns_mapTip')(c.n)));
+    M.pinLayer.addLayer(m);
+  });
   myPins().forEach((pn) => {
     const m = L.marker([pn.lat, pn.lng], { icon: L.divIcon({ className: 'mypin', html: '★', iconSize: [28, 28], iconAnchor: [14, 14] }), keyboard: true, title: pn.name });
     m.on('click', () => { S.mapSel = { t: 'pin', id: pn.id }; render(); });
@@ -769,17 +775,18 @@ function adminView() {
   if (!isAdmin()) return `<div class="panel empty">${esc(T('err_forbidden'))}</div>`;
   const a = S.admin;
   if (!a) return `<div class="panel empty">${esc(T('loading'))}</div>`;
-  const sub = ['overview', 'reports', 'spots', 'feedback', 'admins', 'activity'];
-  const nav = `<div class="chips" style="margin-bottom:16px">${sub.map((k) => `<button class="chip" data-act="admintab" data-v="${k}" aria-pressed="${S.adminTab === k}">${esc(T('adm_' + k))}${k === 'feedback' && a.counts.feedbackNew ? `<i class="num">${a.counts.feedbackNew}</i>` : ''}${k === 'reports' && a.counts.reportsOpen ? `<i class="num">${a.counts.reportsOpen}</i>` : ''}</button>`).join('')}</div>`;
+  const sub = ['overview', 'reports', 'newspots', 'spots', 'feedback', 'admins', 'activity'];
+  const nav = `<div class="chips" style="margin-bottom:16px">${sub.map((k) => `<button class="chip" data-act="admintab" data-v="${k}" aria-pressed="${S.adminTab === k}">${esc(T('adm_' + k))}${k === 'feedback' && a.counts.feedbackNew ? `<i class="num">${a.counts.feedbackNew}</i>` : ''}${k === 'reports' && a.counts.reportsOpen ? `<i class="num">${a.counts.reportsOpen}</i>` : ''}${k === 'newspots' && a.counts.candidatesReady ? `<i class="num">${a.counts.candidatesReady}</i>` : ''}</button>`).join('')}</div>`;
   let body = '';
   if (S.adminTab === 'overview') {
     const c = a.counts, tile = (k, v) => `<div class="stat panel"><small>${esc(T(k))}</small><b class="num">${v}</b></div>`;
-    body = `<div class="stats">${tile('st_users', c.users)}${tile('st_new7', c.newUsers7d)}${tile('st_posts', c.posts)}${tile('st_catches', c.catches)}${tile('st_groups', c.groups)}${tile('st_msgs', c.messages)}${tile('st_spots', c.spots)}${tile('st_reports', c.reportsOpen)}${tile('st_fbnew', c.feedbackNew)}</div>
+    body = `<div class="stats">${tile('st_users', c.users)}${tile('st_new7', c.newUsers7d)}${tile('st_posts', c.posts)}${tile('st_catches', c.catches)}${tile('st_groups', c.groups)}${tile('st_msgs', c.messages)}${tile('st_spots', c.spots)}${tile('st_newspots', c.candidatesReady)}${tile('st_reports', c.reportsOpen)}${tile('st_fbnew', c.feedbackNew)}</div>
      <div class="panel pad"><b>${esc(T('adm_what'))}</b><p class="muted">${esc(T('adm_whatBody'))}</p><div class="row"><button class="btn primary" data-act="admintab" data-v="spots">${esc(T('adm_spots'))}</button><button class="btn" data-act="admintab" data-v="feedback">${esc(T('adm_feedback'))}</button></div></div>`;
   } else if (S.adminTab === 'spots') {
     const pref = `<option value="all">${esc(T('allPrefs'))}</option>` + D.PREFS.map((p) => `<option value="${p.id}"${S.spotPref === p.id ? ' selected' : ''}>${esc(p[S.lang])}</option>`).join('');
     body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><span class="row" style="gap:8px">${me() && me().owner ? `<button class="btn" data-act="importosm">${esc(T('importOsm'))}</button>` : ''}<button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></span></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))} ${esc(T('importNote'))}</p><div id="aspots">${spotTable()}</div>`;
   } else if (S.adminTab === 'reports') body = reportsList();
+  else if (S.adminTab === 'newspots') body = candidatesList();
   else if (S.adminTab === 'feedback') body = feedbackList();
   else if (S.adminTab === 'admins') {
     const owner = !!me().owner;
@@ -872,7 +879,7 @@ function postSheet() {
 }
 function catchSheet() {
   return sheetWrap(`<h2>${esc(T('shareCatch'))}</h2><form data-form="catch" style="display:grid;gap:12px">
-   <label class="f">${esc(T('photoLbl'))}<input type="file" id="c-file" accept="image/*"><span class="hint">${esc(T('photoHint'))}</span></label><img class="prev" id="c-prev" alt="" hidden>
+   <label class="f">${esc(T('photoLbl'))}<input type="file" id="c-file" accept="image/*"><span class="hint">${esc(T('photoHint'))}</span></label><img class="prev" id="c-prev" alt="" hidden><p class="small muted" id="c-gps"${S.gps ? '' : ' hidden'}>📍 ${esc(T('gpsNote'))}</p>
    <div class="two"><label class="f">${esc(T('species'))}<select id="c-fish">${fishOpts('seabass', true)}</select></label><label class="f">${esc(T('size'))}<input type="number" id="c-size" min="1" max="300"></label></div>
    <div class="two"><label class="f">${esc(T('caught'))}<input type="date" id="c-date" required max="${todayStr()}" value="${todayStr()}"></label><label class="f">${esc(T('locLbl'))}<select id="c-loc">${spotOpts(homeSpotId(), { custom: true, area: true })}</select></label></div>
    <label class="f" id="c-customwrap" hidden>${esc(T('customName'))}<input type="text" id="c-custom" maxlength="40"></label><p class="small muted">${esc(T('locNote'))}</p>
@@ -911,6 +918,19 @@ function reportSheet() {
    <p class="muted small">${esc(T('reportWhy'))}</p><div class="opts">${reasons}</div>
    <label class="f">${esc(T('reportNote'))}<textarea id="rp-note" maxlength="200"></textarea></label>
    <p class="err" id="rp-err" role="alert"></p>${btnRow('closesheet', T('reportSend'))}</form>`);
+}
+function candidatesList() {
+  const list = S.admin.candidates || [];
+  const prefOpts = (sel) => D.PREFS.map((p) => `<option value="${p.id}"${sel === p.id ? ' selected' : ''}>${esc(p[S.lang])}</option>`).join('');
+  const cards = list.map((c) => `<article class="panel fbcard">
+    <div class="row" style="gap:8px;justify-content:space-between"><span class="row" style="gap:8px"><span class="pill ride">${esc(T('ns_count')(c.n, c.anglers))}</span><span class="pill">${esc(T('ns_adminOnly'))}</span></span><span class="muted small num">${esc(timeStr(c.last))}</span></div>
+    <div class="small muted">${c.near ? esc(T('ns_near')(c.near[S.lang], c.near.km)) + ' · ' : ''}<span class="num">${c.lat}, ${c.lng}</span> · <a href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">${esc(T('ns_openMap'))}</a></div>
+    ${c.photos.length ? `<div class="thumbs">${c.photos.map((u) => `<span class="thumb"><img src="${esc(u)}" alt="" loading="lazy"></span>`).join('')}</div>` : ''}
+    <div class="two"><label class="f">${esc(T('ns_nameEn'))}<input type="text" id="ns-en-${esc(c.id)}" maxlength="60"></label><label class="f">${esc(T('ns_nameJa'))}<input type="text" id="ns-ja-${esc(c.id)}" maxlength="60"></label></div>
+    <div class="two"><label class="f">${esc(T('typeLbl'))}<select id="ns-type-${esc(c.id)}">${['s', 'b', 'f'].map((t) => `<option value="${t}"${c.type === t ? ' selected' : ''}>${esc(T('type_' + t))}</option>`).join('')}</select></label><label class="f">${esc(T('prefLbl'))}<select id="ns-pref-${esc(c.id)}">${prefOpts(c.pref)}</select></label></div>
+    <p class="err" id="ns-err-${esc(c.id)}" role="alert"></p>
+    <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn sm warn" data-act="candact" data-id="${esc(c.id)}" data-a="reject">${esc(T('ns_reject'))}</button><button class="btn sm primary" data-act="candact" data-id="${esc(c.id)}" data-a="approve">${esc(T('ns_approve'))}</button></div></article>`).join('');
+  return `<p class="muted small" style="margin-bottom:12px">${esc(T('ns_intro'))}</p>${cards || `<div class="panel empty">${esc(T('ns_none'))}</div>`}`;
 }
 function reportsList() {
   const a = S.admin, open = a.reports.filter((r) => r.status === 'open'), done = a.reports.filter((r) => r.status !== 'open');
@@ -1011,8 +1031,42 @@ function render() {
   else if (S.sheet && !keep.focus && ['auth', 'account', 'feedback', 'spot'].indexOf(S.sheet.k) > -1) { const f = $('.sheet input:not([type=hidden]),.sheet textarea'); if (f) f.focus(); }
   markRead();
 }
-function closeSheet() { S.sheet = null; S.photo = null; }
+function closeSheet() { S.sheet = null; S.photo = null; S.gps = null; }
 function openRoom(key) { S.room = key; S.tab = 'chat'; S.sheet = null; S.focusId = 'chatin'; render(); load(); }
+
+/* ---------- GPS from the photo's EXIF block (read in the browser; the uploaded copy has all location data stripped) ---------- */
+function readGps(file) {
+  return new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const v = new DataView(fr.result); let o = 2;
+        if (v.getUint16(0) !== 0xFFD8) return res(null);
+        while (o + 4 < v.byteLength) {
+          const mk = v.getUint16(o), len = v.getUint16(o + 2);
+          if (mk === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) { res(parseExif(v, o + 10)); return; }
+          if ((mk & 0xFF00) !== 0xFF00 || mk === 0xFFDA) break;
+          o += 2 + len;
+        }
+      } catch (e) { /* unreadable EXIF */ }
+      res(null);
+    };
+    fr.onerror = () => res(null);
+    fr.readAsArrayBuffer(file.slice(0, 262144));
+  });
+}
+function parseExif(v, t) {
+  const le = v.getUint16(t) === 0x4949, u16 = (p) => v.getUint16(p, le), u32 = (p) => v.getUint32(p, le);
+  const ifd = (off) => { const m = {}, n = u16(t + off); for (let i = 0; i < n; i++) { const e = t + off + 2 + i * 12; m[u16(e)] = { type: u16(e + 2), cnt: u32(e + 4), at: e + 8 }; } return m; };
+  const gp = ifd(u32(t + 4))[0x8825]; if (!gp) return null;
+  const g = ifd(u32(gp.at));
+  const rat = (e) => { const p = t + u32(e.at); let r = 0; for (let i = 0; i < 3; i++) r += (u32(p + i * 8) / (u32(p + i * 8 + 4) || 1)) / Math.pow(60, i); return r; };
+  const ch = (e) => String.fromCharCode(v.getUint8(e.at));
+  if (!g[2] || !g[4] || !g[1] || !g[3]) return null;
+  let lat = rat(g[2]), lng = rat(g[4]);
+  if (ch(g[1]) === 'S') lat = -lat; if (ch(g[3]) === 'W') lng = -lng;
+  return isFinite(lat) && isFinite(lng) && (lat || lng) ? { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 } : null;
+}
 
 /* ---------- photo resize (strips location data by re-drawing) ---------- */
 function resizeImage(file) {
@@ -1049,6 +1103,17 @@ const A = {
   feedback() { if (!needLogin()) return false; S.sheet = { k: 'feedback' }; },
   report(el) { if (!needLogin()) return false; S.sheet = { k: 'report', t: el.dataset.t, id: el.dataset.id }; },
   repfilter(el) { S.repFilter = el.dataset.v; },
+  candact(el) {
+    const id = el.dataset.id, a = el.dataset.a;
+    if (a === 'reject') { if (!confirm(T('ns_confirmReject'))) return false; }
+    const body = { action: a };
+    if (a === 'approve') {
+      body.en = val('ns-en-' + id).trim(); body.ja = val('ns-ja-' + id).trim(); body.type = val('ns-type-' + id); body.pref = val('ns-pref-' + id);
+      if (body.en.length < 2 || !body.ja) { setErr('ns-err-' + id, { code: 'invalid_name' }); return false; }
+    }
+    api('POST', '/api/admin/candidates/' + id, body).then(() => load().then(() => loadAdmin())).then(() => { toast(T(a === 'approve' ? 'ns_approved' : 'ns_rejected')); render(); }).catch((e) => setErr('ns-err-' + id, e));
+    return false;
+  },
   repact(el) {
     if (el.dataset.a === 'remove' && !confirm(T('rp_confirm'))) return false;
     api('POST', '/api/admin/reports/' + el.dataset.id, { action: el.dataset.a }).then(() => load().then(() => loadAdmin())).then(() => { toast(T('rp_done')); render(); }).catch(fail);
@@ -1078,7 +1143,7 @@ const A = {
   closesheet() { closeSheet(); }, scrim(el, e) { if (e.target !== el) return false; closeSheet(); },
   pwtoggle(el) { $$('#r-pw,#r-pw2').forEach((i) => { i.type = i.type === 'password' ? 'text' : 'password'; }); return false; },
   newpost() { if (!needLogin()) return false; S.sheet = { k: 'post' }; },
-  newcatch() { if (!needLogin()) return false; S.photo = null; S.sheet = { k: 'catch' }; },
+  newcatch() { if (!needLogin()) return false; S.photo = null; S.gps = null; S.sheet = { k: 'catch' }; },
   newgroup() { if (!needLogin()) return false; S.sheet = { k: 'group' }; },
   join(el) { if (!needLogin()) return false; S.sheet = { k: 'join', p: el.dataset.p }; },
   logout() { api('POST', '/api/logout').then(() => { closeSheet(); S.admin = null; if (S.tab === 'admin') S.tab = 'tide'; return load(); }).catch(fail); return false; },
@@ -1132,6 +1197,7 @@ document.addEventListener('change', (e) => {
   else if (id === 'c-loc') customWrap('c-customwrap', 'c-custom')(e);
   else if (id === 'c-file') {
     const f = t.files && t.files[0]; S.photo = null; const pv = $('#c-prev'); if (pv) pv.hidden = true;
+    if (f) { S.gps = null; readGps(f).then((g) => { S.gps = g; const gn = $('#c-gps'); if (gn) gn.hidden = !g; }); }
     if (f) resizeImage(f).then((url) => { S.photo = url; if (url && pv) { pv.src = url; pv.hidden = false; } else if (!url) toast(T('err_invalid_photo'), 'bad'); });
   } else if (t.name === 'p-tr') { const w = $('#p-seatwrap'); if (w) w.hidden = t.value !== 'car'; }
   else if (t.classList.contains('fbstatus')) { api('PATCH', '/api/admin/feedback/' + t.dataset.id, { status: t.value }).then(() => loadAdmin()).catch(fail); }
@@ -1218,7 +1284,7 @@ const FORMS = {
     if (v === '__new') { const n = val('c-custom').trim(); if (!n) { $('#c-custom').focus(); return; } loc = { k: 'custom', v: n }; const cs = customSpots(); if (cs.indexOf(n) < 0) { cs.push(n); LS.set('custom', cs.slice(-20)); } }
     else if (v.indexOf('a:') === 0) loc = { k: 'area', v: v.slice(2) }; else if (v.indexOf('c:') === 0) loc = { k: 'custom', v: v.slice(2) }; else loc = { k: 'spot', v };
     const size = parseInt(val('c-size'), 10);
-    api('POST', '/api/catches', { photo: S.photo || '', fish: val('c-fish'), size: isNaN(size) ? 0 : size, date: val('c-date'), loc, cap: val('c-cap').trim(), tackle: { rod: val('c-rod').trim(), reel: val('c-reel').trim(), line: val('c-line').trim(), lure: val('c-lure').trim(), pub: $('#c-pub').checked } })
+    api('POST', '/api/catches', { photo: S.photo || '', gps: S.photo && S.gps ? S.gps : undefined, fish: val('c-fish'), size: isNaN(size) ? 0 : size, date: val('c-date'), loc, cap: val('c-cap').trim(), tackle: { rod: val('c-rod').trim(), reel: val('c-reel').trim(), line: val('c-line').trim(), lure: val('c-lure').trim(), pub: $('#c-pub').checked } })
       .then(() => { closeSheet(); S.tab = 'catches'; return load().then(() => render()); }).catch(fail);
   },
   group() {

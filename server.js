@@ -13,7 +13,7 @@ const { promisify } = require('node:util');
 const scrypt = promisify(crypto.scrypt);
 const D = require('./public/spots.js');
 const { openDb, tx } = require('./db.js');
-const { createForecaster } = require('./marine.js');
+const { createForecaster, km: kmBetween } = require('./marine.js');
 const osm = require('./osm.js');
 
 const PREF_IDS = new Set(D.PREFS.map((p) => p.id));
@@ -102,6 +102,24 @@ function createApp(opts = {}) {
   let spotsRev = Date.now();
   function audit(user, action, target, detail) {
     q('INSERT INTO audit_log(actor,actor_nick,action,target,detail,created_at) VALUES(?,?,?,?,?,?)').run(user ? user.id : null, user ? user.nick : 'cli', action, String(target || '').slice(0, 80), String(detail || '').slice(0, 300), nowISO());
+  }
+
+  /* ---------- new-spot discovery from photo locations ---------- */
+  const MIN_POSTS = Number(process.env.CANDIDATE_MIN_POSTS) || 10;
+  const MIN_ANGLERS = Number(process.env.CANDIDATE_MIN_ANGLERS) || 3;
+  /* A catch photo carried GPS data. If it is not near a known spot, count it toward a hidden candidate place. The coordinates are never sent to ordinary users. */
+  function trackHit(catchId, userId, lat, lng) {
+    if (!validLat(lat) || !validLng(lng)) return;
+    for (const s of q('SELECT lat,lng FROM spots WHERE active=1 AND lat IS NOT NULL AND abs(lat-?)<0.02 AND abs(lng-?)<0.03').all(lat, lng)) if (kmBetween(lat, lng, s.lat, s.lng) < 0.6) return;
+    tx(db, () => {
+      let cand = null;
+      for (const c of q('SELECT * FROM candidates WHERE abs(lat-?)<0.02 AND abs(lng-?)<0.03').all(lat, lng)) if (kmBetween(lat, lng, c.lat, c.lng) < 0.4) { cand = c; break; }
+      if (cand && cand.status !== 'watching') return;
+      if (!cand) { cand = { id: rid(), lat, lng }; q('INSERT INTO candidates(id,lat,lng,created_at) VALUES(?,?,?,?)').run(cand.id, lat, lng, nowISO()); }
+      q('INSERT INTO spot_hits(cand_id,catch_id,user_id,lat,lng,created_at) VALUES(?,?,?,?,?,?)').run(cand.id, catchId, userId, lat, lng, nowISO());
+      const avg = q('SELECT AVG(lat) a, AVG(lng) b FROM spot_hits WHERE cand_id=?').get(cand.id);
+      q('UPDATE candidates SET lat=?, lng=? WHERE id=?').run(avg.a, avg.b, cand.id);
+    });
   }
 
   /* ---------- rate limiting (in memory) ---------- */
@@ -524,6 +542,8 @@ function createApp(opts = {}) {
     const id = rid();
     q('INSERT INTO catches(id,by_user,when_date,loc_k,loc_v,fish,size,photo,cap,rod,reel,line,lure,tackle_pub,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(id, user.id, b.date, loc.k, lv, b.fish, size, photo, str(b.cap, { max: 240, name: 'cap' }), str(t.rod, { max: 60, name: 'rod' }), str(t.reel, { max: 60, name: 'reel' }), str(t.line, { max: 60, name: 'line' }), str(t.lure, { max: 60, name: 'lure' }), t.pub ? 1 : 0, nowISO());
+    const g = b.gps;
+    if (g && typeof g.lat === 'number' && typeof g.lng === 'number') { try { trackHit(id, user.id, g.lat, g.lng); } catch (e) { console.warn('[spots] ' + e.message); } }
     broadcast();
     return { id };
   });
@@ -712,6 +732,20 @@ function createApp(opts = {}) {
     return {};
   });
 
+  function candidateList() {
+    const rows = q(`SELECT c.id,c.lat,c.lng,c.created_at, COUNT(h.id) n, COUNT(DISTINCT h.user_id) anglers, MAX(h.created_at) last
+      FROM candidates c JOIN spot_hits h ON h.cand_id=c.id WHERE c.status='watching' GROUP BY c.id HAVING n>=? AND anglers>=? ORDER BY n DESC LIMIT 100`).all(MIN_POSTS, MIN_ANGLERS);
+    if (!rows.length) return [];
+    const spots = q('SELECT id,en,ja,pref,lat,lng FROM spots WHERE active=1 AND lat IS NOT NULL').all();
+    return rows.map((r) => {
+      let near = null, best = Infinity;
+      for (const s of spots) { const d = kmBetween(r.lat, r.lng, s.lat, s.lng); if (d < best) { best = d; near = s; } }
+      const photos = q("SELECT ca.photo FROM spot_hits h JOIN catches ca ON ca.id=h.catch_id WHERE h.cand_id=? AND ca.photo<>'' ORDER BY h.id DESC LIMIT 4").all(r.id).map((x) => '/uploads/' + x.photo);
+      return { id: r.id, lat: Math.round(r.lat * 1e5) / 1e5, lng: Math.round(r.lng * 1e5) / 1e5, n: r.n, anglers: r.anglers, last: r.last, photos,
+        near: near ? { id: near.id, en: near.en, ja: near.ja, km: Math.round(best * 10) / 10 } : null,
+        type: osm.classify({}, r.lat, r.lng), pref: near ? near.pref : 'aichi' };
+    });
+  }
   route('GET', '/api/admin/overview', (c) => {
     needAdmin(c);
     const count = (sql) => q(sql).get().n;
@@ -725,20 +759,18 @@ function createApp(opts = {}) {
       counts: {
         users: count('SELECT COUNT(*) AS n FROM users'), posts: q('SELECT COUNT(*) AS n FROM posts WHERE date>=?').get(dayStr(0)).n,
         catches: count('SELECT COUNT(*) AS n FROM catches'), groups: count('SELECT COUNT(*) AS n FROM groups'), messages: count('SELECT COUNT(*) AS n FROM messages'),
-        spots: count('SELECT COUNT(*) AS n FROM spots WHERE active=1'), reportsOpen: count("SELECT COUNT(*) AS n FROM reports WHERE status='open'"), feedbackNew: count("SELECT COUNT(*) AS n FROM feedback WHERE status='new'"),
+        spots: count('SELECT COUNT(*) AS n FROM spots WHERE active=1'), reportsOpen: count("SELECT COUNT(*) AS n FROM reports WHERE status='open'"), candidatesReady: candidateList().length, feedbackNew: count("SELECT COUNT(*) AS n FROM feedback WHERE status='new'"),
         newUsers7d: q('SELECT COUNT(*) AS n FROM users WHERE created_at>=?').get(new Date(Date.now() - 7 * 86400000).toISOString()).n
       },
       reports: q("SELECT r.*, u.nick AS rnick, h.nick AS hnick FROM reports r LEFT JOIN users u ON u.id=r.reporter LEFT JOIN users h ON h.id=r.handled_by ORDER BY (r.status='open') DESC, r.created_at DESC LIMIT 200").all()
         .map((r) => ({ id: r.id, type: r.type, target: r.target_id, reason: r.reason, note: r.note, status: r.status, created_at: r.created_at, handled_at: r.handled_at, reporter: r.rnick || '', handler: r.hnick || '', snap: JSON.parse(r.snapshot || '{}'), live: r.status === 'open' ? !!reportTarget(r.type, r.target_id) : false })),
-      spots, feedback,
+      candidates: candidateList(), spots, feedback,
       admins: q("SELECT id,nick,role,created_at FROM users WHERE role IN ('admin','owner') ORDER BY role DESC, created_at").all(),
       audit: q('SELECT id,actor_nick,action,target,detail,created_at FROM audit_log ORDER BY id DESC LIMIT 60').all()
     };
   });
 
-  route('POST', '/api/admin/spots', (c) => {
-    const user = needAdmin(c), b = c.body;
-    limit('w:' + user.id, 120, 60000);
+  function createSpot(user, b) {
     const en = str(b.en, { min: 2, max: 60, name: 'en' }), ja = str(b.ja, { min: 1, max: 60, name: 'ja' });
     if (!['s', 'b', 'f'].includes(b.type)) throw bad('invalid_type');
     if (!PREF_IDS.has(b.pref)) throw bad('invalid_pref');
@@ -753,9 +785,33 @@ function createApp(opts = {}) {
     q('INSERT INTO spots(id,en,ja,type,pref,mean,a,p,p2,p3,lat,lng,builtin,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,1,?)').run(id, en, ja, b.type, b.pref, nb.mean, nb.a, nb.p + off, nb.p2 + off, nb.p3 + off, lat, lng, nowISO());
     audit(user, 'spot.add', id, en + ' / ' + ja);
     spotsRev = Date.now();
+    return id;
+  }
+  route('POST', '/api/admin/spots', (c) => {
+    const user = needAdmin(c);
+    limit('w:' + user.id, 120, 60000);
+    const id = createSpot(user, c.body);
     broadcast();
     return { id };
   });
+  route('POST', '/api/admin/candidates/:id', (c) => {
+    const user = needAdmin(c), b = c.body;
+    limit('w:' + user.id, 120, 60000);
+    const cand = q("SELECT * FROM candidates WHERE id=?").get(c.params.id);
+    if (!cand) throw new HttpError(404, 'not_found');
+    if (cand.status !== 'watching') throw new HttpError(409, 'already_handled');
+    if (b.action === 'approve') {
+      const spotId = createSpot(user, { en: b.en, ja: b.ja, type: b.type, pref: b.pref, lat: b.lat != null ? b.lat : cand.lat, lng: b.lng != null ? b.lng : cand.lng });
+      q("UPDATE candidates SET status='approved', spot_id=?, handled_by=?, handled_at=? WHERE id=?").run(spotId, user.id, nowISO(), cand.id);
+      audit(user, 'candidate.approve', cand.id, spotId);
+    } else if (b.action === 'reject') {
+      q("UPDATE candidates SET status='rejected', handled_by=?, handled_at=? WHERE id=?").run(user.id, nowISO(), cand.id);
+      audit(user, 'candidate.reject', cand.id, '');
+    } else throw bad('invalid_action');
+    broadcast();
+    return {};
+  });
+
   route('PATCH', '/api/admin/spots/:id', (c) => {
     const user = needAdmin(c), b = c.body;
     limit('w:' + user.id, 120, 60000);

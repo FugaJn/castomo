@@ -11,6 +11,8 @@ const QUERY = '[out:json][timeout:150];area["ISO3166-1"="JP"][admin_level=2]->.j
   'nwr["leisure"="fishing"](area.jp);' +
   'nwr["sport"="fishing"](area.jp);' +
   'nwr["man_made"="pier"]["fishing"="yes"](area.jp);' +
+  'nwr["name"~"海釣|釣り公園|釣公園|釣り場|釣場|釣り堀|釣堀|フィッシングパーク|フィッシングピア|Fishing (Park|Pier|Area|Spot)"][!"shop"][!"office"](area.jp);' +
+  'nwr["man_made"="pier"]["name"~"釣|Fishing"](area.jp);' +
   ');out center tags;';
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(QUERY);
 
@@ -41,6 +43,7 @@ function parseOverpass(json) {
     if (typeof lat !== 'number' || typeof lng !== 'number') continue;
     if (lat < 20 || lat > 46 || lng < 122 || lng > 154) continue;
     const name = tags.name || tags['name:ja'] || tags['name:en'];
+    if (tags.shop || tags.office || tags.amenity === 'restaurant') continue;
     if (!name) { unnamed++; continue; }
     const ja = (tags['name:ja'] || (hasJapanese(name) ? name : tags.name || name)).slice(0, 60);
     const en = (tags['name:en'] || tags['name:ja_rm'] || tags.name || name).slice(0, 60);

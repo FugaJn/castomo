@@ -394,3 +394,44 @@ test('keep me logged in controls cookie lifetime', async () => {
   assert.match(on, /Max-Age=2592000/);
   assert.doesNotMatch(off, /Max-Age/);
 });
+
+test('new spots: photo locations build an admin-only candidate that can be approved', async () => {
+  const day = new Date().toISOString().slice(0, 10);
+  const post = (who, lat, lng) => who('POST', '/api/catches', { fish: 'aji', date: day, size: 5, loc: { k: 'area', v: 'aichi' }, cap: 'x', tackle: {}, gps: { lat, lng } });
+  const spotsBefore = (await bob('GET', '/api/spots')).body.spots.length;
+  const who = [alice, bob, carol];
+  for (let i = 0; i < 9; i++) assert.equal((await post(who[i % 3], 36.0 + i * 0.0002, 138.0)).status, 200);
+  let ov = (await bob('GET', '/api/admin/overview')).body;
+  assert.equal(ov.candidates.length, 0, 'nine posts are not enough');
+  const last = await post(alice, 36.0001, 138.0001);
+  assert.equal(last.status, 200);
+  ov = (await bob('GET', '/api/admin/overview')).body;
+  assert.equal(ov.candidates.length, 1);
+  const cand = ov.candidates[0];
+  assert.equal(cand.n, 10); assert.equal(cand.anglers, 3); assert.deepEqual(cand.photos, []);
+  assert.equal((await carol('GET', '/api/admin/overview')).status, 403);
+  assert.equal((await carol('POST', '/api/admin/candidates/' + cand.id, { action: 'approve' })).status, 403);
+  // nothing about the hidden place reaches ordinary users or the public spot list
+  const pub = JSON.stringify((await carol('GET', '/api/state')).body);
+  assert.ok(!pub.includes('"candidates"') && !pub.includes(String(cand.lat)), 'candidate coordinates are not public');
+  assert.equal((await bob('GET', '/api/spots')).body.spots.length, spotsBefore);
+  // bad coordinates and posts near an existing spot are ignored
+  assert.equal((await post(alice, 0, 0)).status, 200);
+  assert.equal((await post(alice, 35.09, 136.89)).status, 200);
+  assert.equal((await bob('GET', '/api/admin/overview')).body.candidates.length, 1);
+  // approve
+  assert.equal((await bob('POST', '/api/admin/candidates/' + cand.id, { action: 'approve', en: 'Hidden Test Pond', ja: '隠れ池', type: 'f', pref: 'nagano' })).status, 200);
+  assert.equal((await bob('POST', '/api/admin/candidates/' + cand.id, { action: 'reject' })).status, 409);
+  const st = (await carol('GET', '/api/spots')).body;
+  assert.equal(st.spots.length, spotsBefore + 1);
+  assert.ok(st.spots.some((s) => s.en === 'Hidden Test Pond'));
+  // later posts from that place are not counted again, and a rejected place stays hidden
+  assert.equal((await post(bob, 36.0, 138.0)).status, 200);
+  const day2 = 37.0;
+  for (let i = 0; i < 10; i++) await post(who[i % 3], day2, 139.0);
+  const c2 = (await bob('GET', '/api/admin/overview')).body.candidates;
+  assert.equal(c2.length, 1);
+  assert.equal((await bob('POST', '/api/admin/candidates/' + c2[0].id, { action: 'reject' })).status, 200);
+  for (let i = 0; i < 12; i++) await post(who[i % 3], day2, 139.0);
+  assert.equal((await bob('GET', '/api/admin/overview')).body.candidates.length, 0);
+});
