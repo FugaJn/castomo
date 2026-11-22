@@ -251,8 +251,9 @@ function createApp(opts = {}) {
       }
     }
     const feedback = user ? q('SELECT id,kind,text,status,note,created_at FROM feedback WHERE user_id=? ORDER BY created_at DESC LIMIT 20').all(uid) : [];
+    const inbox = user ? q('SELECT id,kind,body,ref_text,created_at,read_at FROM inbox WHERE user_id=? ORDER BY id DESC LIMIT 50').all(uid) : [];
     const setup = { claimable: !!user && setupCode.length >= 16 && !q("SELECT 1 FROM users WHERE role='owner'").get() };
-    return { me, users, friends, posts, catches, groups, rooms, feedback, setup, spotsRev };
+    return { me, users, friends, posts, catches, groups, rooms, feedback, inbox, setup, spotsRev };
   }
 
   /* ---------- routes ---------- */
@@ -593,6 +594,19 @@ function createApp(opts = {}) {
   });
 
   /* ---------- feedback (any signed-in user) ---------- */
+  /* ---------- inbox (messages from admins) ---------- */
+  route('POST', '/api/inbox/read', (c) => {
+    const user = needUser(c);
+    q('UPDATE inbox SET read_at=? WHERE user_id=? AND read_at IS NULL').run(nowISO(), user.id);
+    return {};
+  });
+  route('DELETE', '/api/inbox/:id', (c) => {
+    const user = needUser(c);
+    q('DELETE FROM inbox WHERE id=? AND user_id=?').run(Number(c.params.id) || 0, user.id);
+    broadcast();
+    return {};
+  });
+
   route('POST', '/api/feedback', (c) => {
     const user = needUser(c), b = c.body;
     limit('fb:' + user.id, 5, 3600000);
@@ -702,6 +716,8 @@ function createApp(opts = {}) {
     const status = 'status' in b ? (['new', 'in_progress', 'done', 'wontfix'].includes(b.status) ? b.status : (() => { throw bad('invalid_status'); })()) : f.status;
     const note = 'note' in b ? str(b.note, { max: 1000, name: 'note' }) : f.note;
     q('UPDATE feedback SET status=?, note=?, updated_at=? WHERE id=?').run(status, note, nowISO(), f.id);
+    const replied = note !== f.note && note.length > 0 && !!f.user_id;
+    if (replied) q('INSERT INTO inbox(user_id,kind,body,ref_text,created_at) VALUES(?,?,?,?,?)').run(f.user_id, 'admin_reply', note, f.text.slice(0, 200), nowISO());
     audit(user, 'feedback.update', f.id, status + (note !== f.note ? ' (reply)' : ''));
     broadcast();
     return {};

@@ -216,6 +216,7 @@ function header() {
   const seg = (act, cur, items) => items.map(([v, label]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${cur === v}">${esc(label)}</button>`).join('');
   return `<header class="bar"><div class="brand"><img src="/logo.png" alt="" width="40" height="40"><div><b>${esc(T('brand'))}</b><small>${esc(T('sub'))}</small></div></div>
   <div class="bar-r">
+    ${m ? `<button class="btn sm" data-act="inbox">${esc(T('inboxBtn'))}${unreadCount() ? `<span class="dot" aria-label="${esc(T('unreadLbl'))}">${unreadCount()}</span>` : ''}</button>` : ''}
     <button class="btn sm" data-act="feedback">${esc(T('feedbackBtn'))}</button>
     <div class="seg" role="group" aria-label="${esc(T('themeLbl'))}">${seg('theme', S.theme, [['auto', T('theme_auto')], ['light', T('theme_light')], ['dark', T('theme_dark')]])}</div>
     <div class="seg" role="group" aria-label="Language">${seg('lang', S.lang, [['en', 'EN'], ['ja', '日本語']])}</div>
@@ -761,6 +762,17 @@ function spotSheet() {
    <div class="two"><label class="f">${esc(T('latLbl'))}<input type="number" id="s-lat" required step="0.0001" min="20" max="46" value="${s && s.lat != null ? s.lat : ''}"></label><label class="f">${esc(T('lngLbl'))}<input type="number" id="s-lng" required step="0.0001" min="122" max="154" value="${s && s.lng != null ? s.lng : ''}"></label></div>
    <p class="small muted">${esc(T('spotTideNote'))}</p><p class="err" id="spot-err" role="alert"></p>${btnRow('closesheet', T('save'))}</form>`);
 }
+const unreadCount = () => ((S.data && S.data.inbox) || []).filter((m) => !m.read_at).length;
+function inboxSheet() {
+  const list = (S.data.inbox || []);
+  const fresh = S.inboxNew || [];
+  const body = list.length ? list.map((m) => `<article class="fbmine"${fresh.indexOf(m.id) > -1 ? ' style="border:1px solid var(--accent)"' : ''}>
+    <div class="row" style="gap:8px"><span class="pill car">${esc(T('fromAdmin'))}</span><span class="muted small">${esc(timeStr(m.created_at))}</span></div>
+    <p class="fbtext">${esc(m.body)}</p>
+    ${m.ref_text ? `<p class="small muted">${esc(T('aboutYourFeedback'))}: ${esc(m.ref_text)}</p>` : ''}
+    <div class="row" style="justify-content:flex-end"><button class="linkbtn small" data-act="delinbox" data-id="${m.id}">${esc(T('del'))}</button></div></article>`).join('') : `<p class="muted">${esc(T('inboxEmpty'))}</p>`;
+  return sheetWrap(`<h2>${esc(T('inboxTitle'))}</h2>${body}<div class="row" style="justify-content:flex-end"><button class="btn" data-act="closesheet">${esc(T('close'))}</button></div>`);
+}
 function feedbackSheet() {
   const mineFb = (S.data.feedback || []);
   const past = mineFb.length ? `<div class="sec"><b class="small muted">${esc(T('myFeedback'))}</b>${mineFb.map((f) => `<div class="fbmine"><div class="row" style="gap:8px"><span class="pill">${esc(T('fbk_' + f.kind))}</span><span class="pill ${f.status === 'done' ? 'good' : ''}">${esc(T('fbs_' + f.status))}</span><span class="muted small">${esc(timeStr(f.created_at))}</span></div><p class="small">${esc(f.text)}</p>${f.note ? `<p class="small reply"><b>${esc(T('adminReply'))}:</b> ${esc(f.note)}</p>` : ''}</div>`).join('')}</div>` : '';
@@ -780,6 +792,7 @@ function sheetHtml() {
     case 'join': return joinSheet();
     case 'spot': return S.admin ? spotSheet() : '';
     case 'feedback': return feedbackSheet();
+    case 'inbox': return me() ? inboxSheet() : '';
   }
   return '';
 }
@@ -865,6 +878,13 @@ const A = {
   account() { if (!needLogin()) return false; S.sheet = { k: 'account' }; },
   profile(el) { S.sheet = { k: 'profile', u: el.dataset.u }; },
   feedback() { if (!needLogin()) return false; S.sheet = { k: 'feedback' }; },
+  inbox() {
+    if (!needLogin()) return false;
+    S.inboxNew = (S.data.inbox || []).filter((m) => !m.read_at).map((m) => m.id);
+    S.sheet = { k: 'inbox' };
+    if (S.inboxNew.length) api('POST', '/api/inbox/read').then(() => load()).catch(() => {});
+  },
+  delinbox(el) { api('DELETE', '/api/inbox/' + el.dataset.id).then(() => load()).catch(fail); },
   closesheet() { closeSheet(); }, scrim(el, e) { if (e.target !== el) return false; closeSheet(); },
   pwtoggle(el) { $$('#r-pw,#r-pw2').forEach((i) => { i.type = i.type === 'password' ? 'text' : 'password'; }); return false; },
   newpost() { if (!needLogin()) return false; S.sheet = { k: 'post' }; },

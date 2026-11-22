@@ -198,6 +198,20 @@ function openDb(file) {
   if (v < 2) tx(db, () => { db.exec(SCHEMA_V2); db.exec('PRAGMA user_version=2'); });
   /* v3: coordinates per spot, used for live tide (nearest JMA station) and weather */
   if (v < 3) tx(db, () => { db.exec('ALTER TABLE spots ADD COLUMN lat REAL; ALTER TABLE spots ADD COLUMN lng REAL; PRAGMA user_version=3'); });
+  /* v4: inbox. Messages from admins (replies to feedback) land here for the user. */
+  if (v < 4) tx(db, () => {
+    db.exec(`CREATE TABLE inbox(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      body TEXT NOT NULL,
+      ref_text TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      read_at TEXT
+    );
+    CREATE INDEX inbox_user ON inbox(user_id, id DESC);
+    PRAGMA user_version=4`);
+  });
   seedSpots(db);
   /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
   const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');

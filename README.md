@@ -33,6 +33,10 @@ Admin rights are a `role` column on the user (`user` / `admin` / `owner`), check
 
 Other CLI: `node admin.js list`, `node admin.js revoke <nickname>`. Every admin action is written to the Activity log.
 
+## Feedback and replies
+
+Any signed-in user can send a Bug / Idea / Other message (Feedback button). Admins see them in Admin > Feedback, set a status and write a reply. Saving a reply also sends it to that user's Inbox (header button, with an unread badge) labelled "Message from a Castomo admin". Editing the reply text sends a new message; changing only the status does not.
+
 ## Tests
 
     npm test
