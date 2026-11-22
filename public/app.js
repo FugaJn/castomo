@@ -381,7 +381,9 @@ function tideView() {
   else {
     const st = live.tide && live.tide.station;
     note = esc(fresh ? T('fcSrcWx') : T('fcSrc')(st ? st.name : '', st ? st.km : 0)) + (fresh ? ' ' + esc(T('permitNote')) : '');
+    if (live.weather && live.weather.src === 'met.no') note = note.replace('Open-Meteo', 'MET Norway');
   }
+  if (mode === 'live' && !live.weather) note += ` <span class="err">${esc(T('fcNoWx'))}</span>`;
   const top1 = weatherOnly ? `<p class="muted small" style="margin-bottom:10px">${esc(fresh ? T('noTide') : mode === 'live' ? T('fcNoTide') : '')}</p>` : '';
   return `<section>${head}<div class="stats">${stats}</div>${top1}
    <div class="panel chartpanel"><div class="keys">${weatherOnly ? '' : '<div class="k0">cm</div>'}<div>${esc(T('hour'))}</div><div>${esc(T('wx'))}</div><div>${esc(T('temp'))}</div><div>${esc(T('wind'))} m/s</div></div>

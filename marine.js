@@ -10,6 +10,7 @@ const path = require('node:path');
 const STATIONS = require('./stations.js');
 
 const JMA_URL = (year, code) => `https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/txt/${year}/${code}.txt`;
+const MET_URL = (lat, lng) => 'https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=' + lat + '&lon=' + lng;
 const WX_URL = (lat, lng) => 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lng +
   '&hourly=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&daily=sunrise,sunset&wind_speed_unit=ms&timezone=Asia%2FTokyo&forecast_days=7';
 
@@ -114,12 +115,65 @@ function createForecaster({ dataDir, fetchText, now = () => Date.now(), timeoutM
     });
   }
 
+  /* Fallback source (MET Norway, no key, worldwide) in case Open-Meteo refuses requests from the host. */
+  function sunTimes(lat, lng, date) {
+    const rad = Math.PI / 180, [y, m, d] = date.split('-').map(Number);
+    const n = Math.floor((Date.UTC(y, m - 1, d) - Date.UTC(2000, 0, 1, 12)) / 864e5) + 1.5;
+    const L = (280.46 + 0.9856474 * n) % 360, g = (357.528 + 0.9856003 * n) * rad;
+    const lam = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad;
+    const dec = Math.asin(Math.sin(23.439 * rad) * Math.sin(lam));
+    const eqt = 4 * (L - Math.atan2(Math.cos(23.439 * rad) * Math.sin(lam), Math.cos(lam)) / rad);
+    const ha = Math.acos((Math.cos(90.833 * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec))) / rad;
+    let eq = eqt; while (eq > 720) eq -= 1440; while (eq < -720) eq += 1440;
+    const noon = 720 - 4 * lng - eq + 540;                 // minutes after midnight, JST
+    return { sr: Math.round(noon - 4 * ha), ss: Math.round(noon + 4 * ha) };
+  }
+  const symToCode = (s) => {
+    s = String(s || '').replace(/_(day|night|polartwilight)$/, '');
+    if (s.includes('thunder')) return 95;
+    if (s.includes('snow')) return 71;
+    if (s.includes('sleet')) return 67;
+    if (s.includes('rain') || s.includes('drizzle')) return 61;
+    if (s === 'fog') return 45;
+    if (s === 'clearsky') return 0;
+    if (s === 'fair') return 1;
+    if (s === 'partlycloudy') return 2;
+    return 3;
+  };
+  function parseMet(txt, lat, lng) {
+    const ts = JSON.parse(txt).properties.timeseries;
+    if (!Array.isArray(ts) || ts.length < 24) throw new Error('unexpected MET response');
+    const byHour = new Map();
+    for (const e of ts) {
+      const t = Date.parse(e.time); if (isNaN(t)) continue;
+      const i = e.data.instant.details, nx = e.data.next_1_hours || e.data.next_6_hours;
+      byHour.set(Math.floor((t + JST_MS) / 3600000), { t: i.air_temperature, w: i.wind_speed, d: i.wind_from_direction, c: symToCode(nx && nx.summary && nx.summary.symbol_code) });
+    }
+    const first = Math.floor((now() + JST_MS) / 86400000) * 24, days = [];
+    let last = null;
+    for (let k = 0; k < 7; k++) {
+      const date = jstDate(k, now()), arr = { temp: [], code: [], wind: [], dir: [] }, any = [];
+      for (let h = 0; h < 24; h++) {
+        const v = byHour.get(first + k * 24 + h) || last;
+        if (byHour.has(first + k * 24 + h)) last = v;
+        any.push(!!v);
+        arr.temp.push(v ? v.t : null); arr.code.push(v ? v.c : null); arr.wind.push(v ? v.w : null); arr.dir.push(v ? v.d : null);
+      }
+      if (!any.some(Boolean)) break;
+      const sun = sunTimes(lat, lng, date);
+      days.push({ date, sr: sun.sr, ss: sun.ss, ...arr });
+    }
+    if (!days.length) throw new Error('no MET data');
+    return { days };
+  }
+
   async function weather(lat, lng) {
     const key = lat.toFixed(1) + ',' + lng.toFixed(1);
     const c = wxCache.get(key);
     if (c && now() - c.at < 30 * 60000) return c.data;
     if ((failed.get('wx' + key) || 0) > now()) return c ? c.data : null;
     return once('wx' + key, async () => {
+      let data = null;
       try {
         const j = JSON.parse(await get(WX_URL(lat.toFixed(2), lng.toFixed(2))));
         const h = j.hourly, d = j.daily;
@@ -132,14 +186,17 @@ function createForecaster({ dataDir, fetchText, now = () => Date.now(), timeoutM
             temp: sl(h.temperature_2m), code: sl(h.weather_code), wind: sl(h.wind_speed_10m), dir: sl(h.wind_direction_10m)
           });
         }
-        const data = { days };
-        wxCache.set(key, { data, at: now() });
-        return data;
+        data = { days, src: 'open-meteo' };
       } catch (e) {
-        log('weather ' + key + ': ' + e.message);
-        failed.set('wx' + key, now() + 2 * 60000);
-        return c ? c.data : null;
+        log('weather (Open-Meteo) ' + key + ': ' + e.message);
+        try {
+          data = parseMet(await get(MET_URL(lat.toFixed(2), lng.toFixed(2))), lat, lng);
+          data.src = 'met.no';
+        } catch (e2) { log('weather (MET Norway) ' + key + ': ' + e2.message); }
       }
+      if (data) { wxCache.set(key, { data, at: now() }); return data; }
+      failed.set('wx' + key, now() + 2 * 60000);
+      return c ? c.data : null;
     });
   }
 

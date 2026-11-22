@@ -375,3 +375,15 @@ test('reports: users flag spam, admins delete it, author is told', async () => {
   assert.equal(fin.counts.reportsOpen, 0);
   assert.ok(fin.audit.some((a) => a.action === 'report.remove'));
 });
+
+test('weather falls back to MET Norway when Open-Meteo refuses', async () => {
+  const { createForecaster } = require('./marine.js');
+  const now = Date.parse('2026-11-22T03:00:00Z'), ts = [];
+  for (let i = 0; i < 90; i++) ts.push({ time: new Date(Math.floor(now / 36e5) * 36e5 + i * 36e5).toISOString(), data: { instant: { details: { air_temperature: 10, wind_speed: 3, wind_from_direction: 200 } }, next_1_hours: { summary: { symbol_code: 'rain' } } } });
+  const f = createForecaster({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'wx-')), now: () => now, fetchText: async (u) => { if (u.includes('open-meteo')) throw new Error('HTTP 429'); return JSON.stringify({ properties: { timeseries: ts } }); } });
+  const r = await f.forecast({ id: 'x', type: 'f', lat: 35.09, lng: 136.89 });
+  assert.equal(r.weather.src, 'met.no');
+  assert.equal(r.weather.days.length, 7);
+  assert.equal(r.weather.days[0].code[14], 61);
+  assert.ok(r.weather.days[0].sr > 380 && r.weather.days[0].sr < 400, 'sunrise near 6:30');
+});
