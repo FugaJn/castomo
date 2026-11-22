@@ -129,12 +129,13 @@ function createApp(opts = {}) {
     return '';
   }
   function setCookie(res, value, maxAge) {
-    res.setHeader('Set-Cookie', `${COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${cookieSecure ? '; Secure' : ''}`);
+    /* maxAge null = browser-session cookie (gone when the browser is closed) */
+    res.setHeader('Set-Cookie', `${COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/${maxAge == null ? '' : '; Max-Age=' + maxAge}${cookieSecure ? '; Secure' : ''}`);
   }
-  function startSession(res, userId) {
-    const token = crypto.randomBytes(32).toString('base64url');
-    q('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(sha(token), userId, new Date(Date.now() + SESSION_MS).toISOString());
-    setCookie(res, token, Math.floor(SESSION_MS / 1000));
+  function startSession(res, userId, keep) {
+    const token = crypto.randomBytes(32).toString('base64url'), ms = keep ? SESSION_MS : 12 * 3600 * 1000;
+    q('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(sha(token), userId, new Date(Date.now() + ms).toISOString());
+    setCookie(res, token, keep ? Math.floor(ms / 1000) : null);
   }
   function userFromReq(req) {
     const t = cookieOf(req, COOKIE);
@@ -282,7 +283,7 @@ function createApp(opts = {}) {
     const id = rid();
     const pw = await hashPassword(b.password);
     q('INSERT INTO users(id,nick,name,email,pw,spot,style,target,bio,langs,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id, nick, name, email, pw, spot, style, target, bio, JSON.stringify([lang]), nowISO());
-    startSession(c.res, id);
+    startSession(c.res, id, c.body.keep !== false);
     broadcast();
     return { id };
   });
@@ -294,7 +295,7 @@ function createApp(opts = {}) {
     const u = q('SELECT * FROM users WHERE nick=?').get(nick);
     const ok = u ? await verifyPassword(String(c.body.password || ''), u.pw) : (await verifyPassword('x', 'scrypt$AAAAAAAAAAAAAAAAAAAAAA==$' + Buffer.alloc(64).toString('base64')), false);
     if (!ok) throw new HttpError(401, 'bad_credentials');
-    startSession(c.res, u.id);
+    startSession(c.res, u.id, c.body.keep === true);
     return { id: u.id };
   });
 

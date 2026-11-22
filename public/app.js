@@ -817,16 +817,17 @@ function authSheet() {
   const reg = S.sheet.mode === 'register';
   const head = `<h2>${esc(reg ? T('createAccount') : T('logIn'))}</h2>${S.sheet.why ? `<p class="muted small">${esc(S.sheet.why)}</p>` : ''}`;
   const sw = `<p class="small muted">${esc(reg ? T('haveAccount') : T('noAccount'))} <button class="linkbtn" type="button" data-act="authmode" data-v="${reg ? 'login' : 'register'}">${esc(reg ? T('logIn') : T('signUp'))}</button></p>`;
-  if (!reg) return sheetWrap(`${head}<form data-form="login" style="display:grid;gap:12px"><label class="f">${esc(T('nick'))}<input type="text" id="l-nick" required maxlength="24" autocomplete="username"></label>${pwField('l-pw', T('pwLbl'), 'current-password')}<p class="err" id="auth-err" role="alert"></p>${btnRow('closesheet', T('logIn'))}</form>${sw}`);
+  if (!reg) return sheetWrap(`${head}<form data-form="login" style="display:grid;gap:12px"><label class="f">${esc(T('nick'))}<input type="text" id="l-nick" required maxlength="24" autocomplete="username"></label>${pwField('l-pw', T('pwLbl'), 'current-password')}<label class="check"><input type="checkbox" id="l-keep"${S.keep === false ? '' : ' checked'}> ${esc(T('keepLogged'))}</label><p class="err" id="auth-err" role="alert"></p>${btnRow('closesheet', T('logIn'))}</form>${sw}`);
   return sheetWrap(`${head}<p class="muted small">${esc(T('regNote'))}</p><form data-form="register" style="display:grid;gap:12px" autocomplete="off"><label class="f">${esc(T('nick'))}<input type="text" id="r-nick" required minlength="2" maxlength="24" autocomplete="username"><span class="hint">${esc(T('nickRule'))}</span></label>
    ${pwField('r-pw', T('pwLbl'), 'new-password')}${pwField('r-pw2', T('pwConfirm'), 'new-password')}<div class="small muted">${esc(T('pwRules'))}</div><ul class="pwl" id="pw-list" aria-live="polite">${pwListHtml('', '')}</ul>
    <div class="two"><label class="f">${esc(T('name'))}<input type="text" id="r-name" maxlength="40"></label><label class="f">${esc(T('email'))}<input type="email" id="r-email" maxlength="80" autocomplete="email"></label></div>
+   <p class="small muted" id="email-note">${esc(T('emailNote'))}</p>
    <label class="f">${esc(T('homespot'))}<select id="r-spot">${spotOpts(homeSpotId())}</select></label><p class="err" id="auth-err" role="alert"></p>${btnRow('closesheet', T('createBtn'), 'r-submit').replace('id="r-submit"', 'id="r-submit" disabled')}</form>${sw}`);
 }
 function accountSheet() {
   const m = me(), u = userOf(m.id);
   return sheetWrap(`<h2>${esc(T('account'))}</h2><form data-form="account" style="display:grid;gap:12px"><label class="f">${esc(T('nick'))}<input type="text" id="a-nick" required minlength="2" maxlength="24" value="${esc(m.nick)}"></label>
-   <div class="two"><label class="f">${esc(T('name'))}<input type="text" id="a-name" maxlength="40" value="${esc(m.name)}"></label><label class="f">${esc(T('email'))}<input type="email" id="a-email" maxlength="80" value="${esc(m.email)}"></label></div>
+   <div class="two"><label class="f">${esc(T('name'))}<input type="text" id="a-name" maxlength="40" value="${esc(m.name)}"></label><label class="f">${esc(T('email'))}<input type="email" id="a-email" maxlength="80" value="${esc(m.email)}"></label></div><p class="small muted">${esc(T('emailNote'))}</p>
    <label class="f">${esc(T('homespot'))}<select id="a-spot">${spotOpts(m.spot)}</select></label>
    <div class="two"><label class="f">${esc(T('styleLbl'))}<select id="a-style">${styleOpts(m.style)}</select></label><label class="f">${esc(T('primary'))}<select id="a-target">${fishOpts(m.target, false)}</select></label></div>
    <label class="f">${esc(T('aboutYou'))}<textarea id="a-bio" maxlength="200">${esc(m.bio)}</textarea></label>${btnRow('closesheet', T('save'))}</form>
@@ -1172,7 +1173,7 @@ const FORMS = {
     api('POST', '/api/catches/' + f.dataset.c + '/comments', { text }).then(() => load()).catch((e) => { inp.value = text; fail(e); });
   },
   login() {
-    api('POST', '/api/login', { nick: val('l-nick').trim(), password: val('l-pw') }).then(() => { closeSheet(); return load().then(() => { if (isAdmin()) loadAdmin(); toast(T('welcomeBack')); }); }).catch((e) => setErr('auth-err', e));
+    api('POST', '/api/login', { nick: val('l-nick').trim(), password: val('l-pw'), keep: !!(document.getElementById('l-keep') || {}).checked }).then(() => { closeSheet(); return load().then(() => { if (isAdmin()) loadAdmin(); toast(T('welcomeBack')); }); }).catch((e) => setErr('auth-err', e));
   },
   register() {
     const pw = val('r-pw'); if (!(pwOk(pwChecks(pw)) && pw === val('r-pw2'))) return;

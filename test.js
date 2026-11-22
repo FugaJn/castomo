@@ -387,3 +387,10 @@ test('weather falls back to MET Norway when Open-Meteo refuses', async () => {
   assert.equal(r.weather.days[0].code[14], 61);
   assert.ok(r.weather.days[0].sr > 380 && r.weather.days[0].sr < 400, 'sunrise near 6:30');
 });
+
+test('keep me logged in controls cookie lifetime', async () => {
+  const login = (keep) => fetch(base + '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nick: 'alice', password: PW, keep }) });
+  const on = (await login(true)).headers.get('set-cookie'), off = (await login(false)).headers.get('set-cookie');
+  assert.match(on, /Max-Age=2592000/);
+  assert.doesNotMatch(off, /Max-Age/);
+});

@@ -67,3 +67,13 @@ Admins see the reports in **Admin → Reports** (the tab shows the number of ope
 - **Dismiss report** keeps the content and closes the report.
 
 Every decision is written to the Activity log. Admins can still delete any post directly. Chat messages and banning users are not part of this. The database upgrades itself on start (schema v6).
+
+## Keeping accounts and data on Render
+
+Castomo stores everything (accounts, posts, photos, cached tide files) in `DATA_DIR`. Render's free web service has an ephemeral filesystem, so that folder is wiped on every deploy and restart and accounts disappear. To keep data:
+
+1. Use a paid web service (Starter or higher).
+2. Add a **Disk** to the service (Render dashboard → your service → Disks), mount path `/var/data`, 1 GB is plenty.
+3. Set the environment variable `DATA_DIR=/var/data` and redeploy.
+
+Disks are only available on paid services, and a service with a disk cannot run more than one instance.
