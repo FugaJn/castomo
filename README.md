@@ -37,6 +37,13 @@ Other CLI: `node admin.js list`, `node admin.js revoke <nickname>`. Every admin 
 
 Any signed-in user can send a Bug / Idea / Other message (Feedback button). Admins see them in Admin > Feedback, set a status and write a reply. Saving a reply also sends it to that user's Inbox (header button, with an unread badge) labelled "Message from a Castomo admin". Editing the reply text sends a new message; changing only the status does not.
 
+## Map
+
+- **Map tab:** every active spot is pinned (clustered when zoomed out), coloured by saltwater / brackish / freshwater. Search by name or prefecture, filter by water type, tap a pin or list item to see the spot and the catches posted there. Tap a photo for full details with likes and comments.
+- **Private pins:** "Add my pin", then tap the map. Pins are stored per user and returned only to their owner; they never appear in other users' data or in the admin dashboard. (Whoever has access to the server's database file could still read them, so keep `DATA_DIR` private and back it up securely.)
+- **Base map:** Geospatial Information Authority of Japan (国土地理院) tiles, attribution shown on the map. Leaflet is bundled in `public/vendor` (no CDN).
+- **More spots:** the 201 built-in spots are hand-picked. Owners can click Admin > Spots > "Import from OpenStreetMap" to add named fishing spots from OpenStreetMap (© OpenStreetMap contributors, ODbL). Coverage is partial; prefecture is taken from the nearest existing spot and saltwater/freshwater is guessed from tags and distance to the coast, so review imported spots and fix or hide wrong ones. Re-running only adds new ones.
+
 ## Tests
 
     npm test

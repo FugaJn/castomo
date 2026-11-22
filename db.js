@@ -212,6 +212,23 @@ function openDb(file) {
     CREATE INDEX inbox_user ON inbox(user_id, id DESC);
     PRAGMA user_version=4`);
   });
+  /* v5: imported spots remember their source (for de-duplication); private map pins per user */
+  if (v < 5) tx(db, () => {
+    db.exec(`ALTER TABLE spots ADD COLUMN src TEXT NOT NULL DEFAULT '';
+    ALTER TABLE spots ADD COLUMN osm_id TEXT;
+    CREATE UNIQUE INDEX spots_osm ON spots(osm_id) WHERE osm_id IS NOT NULL;
+    CREATE TABLE pins(
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX pins_user ON pins(user_id);
+    PRAGMA user_version=5`);
+  });
   seedSpots(db);
   /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
   const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');

@@ -26,7 +26,7 @@ const S = {
   room: 'all', q: '', fs: 'all', ft: 'all', aScope: 'all',
   group: null, openC: {},
   sheet: null, dirty: false,
-  data: null, spots: [], spotsRev: 0, sig: '', fc: {},
+  data: null, spots: [], spotsRev: 0, sig: '', fc: {}, mapSel: null, mapQ: '', mapWater: 'all', pinMode: false,
   loaded: false, loadError: false, rendered: false,
   admin: null, adminTab: 'overview', fbFilter: 'all', spotQ: '', spotPref: 'all',
   photo: null, readSent: {}, focusId: null
@@ -225,7 +225,7 @@ function header() {
   </div></header>`;
 }
 function tabs() {
-  const list = ['tide', 'board', 'catches', 'groups', 'chat', 'anglers'].concat(isAdmin() ? ['admin'] : []);
+  const list = ['tide', 'map', 'board', 'catches', 'groups', 'chat', 'anglers'].concat(isAdmin() ? ['admin'] : []);
   const badge = (k) => {
     let n = 0;
     if (k === 'chat') n = unreadTotal();
@@ -451,8 +451,8 @@ function ph(c) {
   <g transform="translate(196 130)"><ellipse rx="84" ry="36" fill="#fff" fill-opacity=".9"/><path d="M76 0L132 -34L132 34Z" fill="#fff" fill-opacity=".9"/><circle cx="-52" cy="-7" r="6" fill="hsl(${h} 55% 26%)"/></g>
   <text x="200" y="280" text-anchor="middle" fill="#fff" fill-opacity=".85" font-size="14">${esc(T('noPhoto'))}</text></svg>`;
 }
-function catchCard(x) {
-  const c = x.c, u = userOf(c.by), mine = c.by === myId(), liked = c.likes.indexOf(myId()) > -1, open = !!S.openC[c.id], tk = c.tackle || {};
+function catchCard(x, detail) {
+  const c = x.c, u = userOf(c.by), mine = c.by === myId(), liked = c.likes.indexOf(myId()) > -1, open = detail === true || !!S.openC[c.id], tk = c.tackle || {};
   const has = !!(tk.rod || tk.reel || tk.line || tk.lure);
   const rows = [['rod', 'rod'], ['reel', 'reel'], ['line', 'lineLbl'], ['lure', 'lureLbl']].filter((r) => tk[r[0]]).map((r) => `<div><span class="k">${esc(T(r[1]))}</span><span>${esc(tk[r[0]])}</span></div>`).join('');
   const tackle = has ? `<div class="tackle"><div class="row" style="gap:8px"><b class="small">${esc(T('tackleLbl'))}</b>${!tk.pub ? `<span class="pill">${esc(T('onlyYou'))}</span>` : ''}</div><div class="facts">${rows}</div></div>` : `<div class="muted small">${esc(T('tacklePrivate'))}</div>`;
@@ -468,7 +468,7 @@ function catchCard(x) {
    <div><h3>${esc(fName(c.fish))}${c.size ? ` · <span class="num">${c.size} cm</span>` : ''}</h3><span class="loc">${pin}${esc(locName(c.loc))}</span></div>
    ${c.cap ? `<p>${esc(c.cap)}</p>` : ''}${tackle}
    <div class="actions"><button class="like" data-act="like" data-c="${c.id}" aria-pressed="${liked}" aria-label="${esc(T('likeLbl'))}">${heart}<span class="num">${c.likes.length}</span></button>
-   <button class="btn sm" data-act="togglec" data-c="${c.id}" aria-expanded="${open}">${esc(T('commentsN')(c.comments.length))}</button>
+   ${detail === true ? `<b class="small">${esc(T('commentsN')(c.comments.length))}</b>` : `<button class="btn sm" data-act="togglec" data-c="${c.id}" aria-expanded="${open}">${esc(T('commentsN')(c.comments.length))}</button>`}
    ${mine ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}">${esc(T('del'))}</button>` : isAdmin() ? `<button class="btn sm warn" data-act="delcatch" data-c="${c.id}" data-admin="1">${esc(T('adminRemove'))}</button>` : ''}</div>
    ${open ? `<div class="comments">${cm}<form class="send" data-form="comment" data-c="${c.id}"><input type="text" id="cm-${c.id}" maxlength="200" autocomplete="off" placeholder="${esc(T('addComment'))}" aria-label="${esc(T('addComment'))}"><button class="btn primary sm" type="submit">${esc(T('postBtn'))}</button></form></div>` : ''}</div></article>`;
 }
@@ -478,7 +478,145 @@ function catchesView() {
   return `<section><p class="muted small feednote">${esc(S.cSort === 'foryou' ? T('feedNote')(prefName(myPref())) : T('sortedNew'))}</p>
    <div class="boardbar"><p class="muted small" style="max-width:60ch">${esc(T('catchLead'))}</p><button class="btn primary" data-act="newcatch">+ ${esc(T('shareCatch'))}</button></div>
    <div class="boardbar">${scopeChips('cscope', S.cScope)}<select id="csort" aria-label="${esc(T('sortLbl'))}" style="width:auto"><option value="foryou"${S.cSort === 'foryou' ? ' selected' : ''}>${esc(T('sortForYou'))}</option><option value="new"${S.cSort === 'new' ? ' selected' : ''}>${esc(T('sortNew'))}</option></select></div>
-   ${list.length ? `<div class="catches">${list.map(catchCard).join('')}</div>` : `<div class="panel empty">${esc(T('noCatches'))}</div>`}</section>`;
+   ${list.length ? `<div class="catches">${list.map((x) => catchCard(x)).join('')}</div>` : `<div class="panel empty">${esc(T('noCatches'))}</div>`}</section>`;
+}
+
+/* ---------- map ---------- */
+const TYPE_COL = { s: '#0A7488', b: '#B9470F', f: '#23704A' };
+const M = { el: null, map: null, cluster: null, pinLayer: null, selLayer: null, sig: '', t: 0 };
+const myPins = () => (S.data && S.data.pins) || [];
+const mapLib = () => typeof L !== 'undefined' && !!L.markerClusterGroup;
+function distKm(la1, ln1, la2, ln2) { const r = Math.PI / 180, x = (ln2 - ln1) * r * Math.cos((la1 + la2) / 2 * r), y = (la2 - la1) * r; return 6371 * Math.hypot(x, y); }
+const mapSpots = () => S.spots.filter((s) => s.active && s.lat != null && (S.mapWater === 'all' || (S.mapWater === 'fresh' ? s.type === 'f' : s.type !== 'f')));
+const spotCatches = (id) => (S.data.catches || []).filter((c) => c.loc.k === 'spot' && c.loc.v === id);
+function pinCatches(pin) {
+  const out = [];
+  (S.data.catches || []).forEach((c) => {
+    if (c.loc.k !== 'spot') return;
+    const s = SM[c.loc.v]; if (!s || s.lat == null) return;
+    const d = distKm(pin.lat, pin.lng, s.lat, s.lng);
+    if (d <= 10) out.push({ c, d });
+  });
+  return out.sort((x, y) => x.d - y.d);
+}
+function thumbs(list) {
+  return `<div class="thumbs">${list.map((c) => `<button class="thumb" data-act="opencatch" data-c="${esc(c.id)}" aria-label="${esc(fName(c.fish))}${c.size ? ' ' + c.size + ' cm' : ''}">${c.photo ? `<img alt="" loading="lazy" src="${esc(c.photo)}">` : ph(c)}<span>${esc(fName(c.fish))}${c.size ? ' · ' + c.size + ' cm' : ''}</span></button>`).join('')}</div>`;
+}
+function spotListHtml() {
+  const q = S.mapQ.trim().toLowerCase(), all = mapSpots();
+  let rows, head;
+  if (q) {
+    rows = all.filter((s) => (s.en + ' ' + s.ja + ' ' + prefName(s.pref) + ' ' + (D.PREFS.find((x) => x.id === s.pref) || {}).en).toLowerCase().indexOf(q) > -1);
+    head = T('mapResults')(Math.min(rows.length, 50), rows.length);
+  } else {
+    const c = M.map ? M.map.getCenter() : { lat: 36.5, lng: 138 };
+    rows = all.map((s) => ({ s, d: distKm(c.lat, c.lng, s.lat, s.lng) })).sort((x, y) => x.d - y.d).slice(0, 50).map((o) => o.s);
+    head = T('mapNearest');
+  }
+  const list = rows.slice(0, 50).map((s) => `<button class="mrow-btn" data-act="mapsel" data-t="spot" data-id="${esc(s.id)}"><span class="swatch" style="background:${TYPE_COL[s.type]}"></span><span class="grow"><b>${esc(s[S.lang])}</b><br><span class="muted small">${esc(prefName(s.pref))}${esc(spotTag(s))}</span></span><span class="num muted small">${spotCatches(s.id).length ? '📷 ' + spotCatches(s.id).length : ''}</span></button>`).join('');
+  return `<p class="small muted" style="margin:0 0 8px">${esc(head)}</p>${list || `<p class="muted">${esc(T('mapNone'))}</p>`}`;
+}
+function pinsListHtml() {
+  const pins = myPins();
+  return `<div class="sec"><b class="small muted">${esc(T('mapMyPins'))}</b>${pins.length ? pins.map((p) => `<button class="mrow-btn" data-act="mapsel" data-t="pin" data-id="${esc(p.id)}"><span class="swatch star">★</span><span class="grow"><b>${esc(p.name)}</b></span></button>`).join('') : `<p class="muted small">${esc(me() ? T('mapNoPins') : T('mapPinsLogin'))}</p>`}</div>`;
+}
+function spotPanel(id) {
+  const s = SM[id]; if (!s) return backBtn() + `<p class="muted">${esc(T('mapNone'))}</p>`;
+  const cs = spotCatches(id);
+  return `${backBtn()}<h3 style="margin:8px 0 2px">${esc(s[S.lang])}</h3><p class="muted small">${esc(s[S.lang === 'en' ? 'ja' : 'en'])} · ${esc(prefName(s.pref))}${esc(spotTag(s))}</p>
+   <div class="row" style="gap:8px;margin:10px 0"><button class="btn sm primary" data-act="sethome" data-id="${esc(id)}">${esc(T('setHome'))}</button><button class="btn sm" data-act="newcatch">${esc(T('shareCatch'))}</button></div>
+   <b class="small muted">${esc(T('catchesHere')(cs.length))}</b>${cs.length ? thumbs(cs) : `<p class="muted small">${esc(T('noCatchesHere'))}</p>`}`;
+}
+function pinPanel(id) {
+  const pn = myPins().find((x) => x.id === id); if (!pn) return backBtn() + `<p class="muted">${esc(T('mapNone'))}</p>`;
+  const near = pinCatches(pn);
+  return `${backBtn()}<h3 style="margin:8px 0 2px">★ ${esc(pn.name)}</h3><p class="small"><span class="pill good">${esc(T('pinPrivate'))}</span></p>${pn.note ? `<p style="margin:8px 0">${esc(pn.note)}</p>` : ''}
+   <p class="muted small num">${pn.lat.toFixed(5)}, ${pn.lng.toFixed(5)}</p>
+   <div class="row" style="gap:8px;margin:10px 0"><button class="btn sm" data-act="editpin" data-id="${esc(pn.id)}">${esc(T('edit'))}</button><button class="btn sm warn" data-act="delpin" data-id="${esc(pn.id)}">${esc(T('del'))}</button></div>
+   <b class="small muted">${esc(T('catchesNearPin')(near.length))}</b>${near.length ? thumbs(near.map((o) => o.c)) : `<p class="muted small">${esc(T('noCatchesHere'))}</p>`}`;
+}
+const backBtn = () => `<button class="linkbtn small" data-act="mapclear">‹ ${esc(T('backToList'))}</button>`;
+function mapSideHtml() {
+  const s = S.mapSel;
+  if (s && s.t === 'spot') return spotPanel(s.id);
+  if (s && s.t === 'pin') return pinPanel(s.id);
+  return spotListHtml() + pinsListHtml();
+}
+function mapView() {
+  const chip = (v, k) => `<button class="chip" data-act="mapwater" data-v="${v}" aria-pressed="${S.mapWater === v}">${esc(T(k))}</button>`;
+  const legend = ['s', 'b', 'f'].map((t) => `<span class="lg"><span class="swatch" style="background:${TYPE_COL[t]}"></span>${esc(T('type_' + t))}</span>`).join('') + `<span class="lg"><span class="swatch star">★</span>${esc(T('mapMyPins'))}</span>`;
+  return `<section><div class="maptools"><input type="text" id="mapq" value="${esc(S.mapQ)}" placeholder="${esc(T('mapSearchPh'))}" aria-label="${esc(T('mapSearchPh'))}" autocomplete="off">
+   <div class="chips">${chip('all', 'waterAll')}${chip('salt', 'waterSalt')}${chip('fresh', 'waterFresh')}</div>
+   <button class="btn${S.pinMode ? ' warn' : ' primary'}" data-act="mappin">${esc(S.pinMode ? T('cancel') : '★ ' + T('mapAddPin'))}</button></div>
+   ${S.pinMode ? `<p class="pinhelp">${esc(T('mapPinHelp'))}</p>` : ''}
+   <div class="maplayout"><div><div id="mapslot" class="mapslot"></div><div class="legend small muted">${legend}<span class="grow"></span><span>${esc(T('mapCount')(mapSpots().length))}</span></div></div>
+   <aside class="mapside panel" id="mapside">${mapSideHtml()}</aside></div></section>`;
+}
+function initMap() {
+  M.el = document.createElement('div'); M.el.className = 'leafmap';
+  const home = SM[homeSpotId()];
+  M.map = L.map(M.el, { center: home && home.lat != null ? [home.lat, home.lng] : [36.5, 138], zoom: home && home.lat != null ? 9 : 5, minZoom: 5, maxZoom: 18, preferCanvas: true });
+  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">出典:国土地理院 / GSI Japan</a> · Imported spots © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' }).addTo(M.map);
+  M.cluster = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45, chunkedLoading: true, disableClusteringAtZoom: 13 }).addTo(M.map);
+  M.pinLayer = L.layerGroup().addTo(M.map);
+  M.selLayer = L.layerGroup().addTo(M.map);
+  M.map.on('click', (e) => {
+    if (S.pinMode) { S.pinMode = false; S.sheet = { k: 'pin', lat: Math.round(e.latlng.lat * 1e5) / 1e5, lng: Math.round(e.latlng.lng * 1e5) / 1e5 }; render(); }
+    else if (S.mapSel) { S.mapSel = null; render(); }
+  });
+  M.map.on('moveend', () => { clearTimeout(M.t); M.t = setTimeout(() => { const box = $('#mapside'); if (box && S.tab === 'map' && !S.mapSel && !S.sheet && !(document.activeElement && document.activeElement.id === 'mapq')) box.innerHTML = mapSideHtml(); }, 350); });
+}
+function syncMarkers() {
+  const sig = [S.spotsRev, S.spots.length, S.lang, S.mapWater, JSON.stringify(myPins())].join('|');
+  if (sig === M.sig) return;
+  M.sig = sig;
+  M.cluster.clearLayers(); M.pinLayer.clearLayers();
+  const arr = mapSpots().map((s) => {
+    const m = L.circleMarker([s.lat, s.lng], { radius: 7, weight: 2, color: '#fff', fillColor: TYPE_COL[s.type], fillOpacity: 0.95, bubblingMouseEvents: false });
+    m.on('click', () => { S.mapSel = { t: 'spot', id: s.id }; render(); });
+    m.bindTooltip(esc(s[S.lang]));
+    return m;
+  });
+  M.cluster.addLayers(arr);
+  myPins().forEach((pn) => {
+    const m = L.marker([pn.lat, pn.lng], { icon: L.divIcon({ className: 'mypin', html: '★', iconSize: [28, 28], iconAnchor: [14, 14] }), keyboard: true, title: pn.name });
+    m.on('click', () => { S.mapSel = { t: 'pin', id: pn.id }; render(); });
+    m.bindTooltip(esc(pn.name));
+    M.pinLayer.addLayer(m);
+  });
+}
+function syncSel() {
+  M.selLayer.clearLayers();
+  const s = S.mapSel; let pt = null;
+  if (s && s.t === 'spot' && SM[s.id] && SM[s.id].lat != null) pt = [SM[s.id].lat, SM[s.id].lng];
+  if (s && s.t === 'pin') { const pn = myPins().find((x) => x.id === s.id); if (pn) pt = [pn.lat, pn.lng]; }
+  if (pt) L.circleMarker(pt, { radius: 15, weight: 3, color: '#E0412B', fill: false, interactive: false }).addTo(M.selLayer);
+  if (S.mapFly && pt) { M.map.flyTo(pt, Math.max(M.map.getZoom(), 13), { duration: 0.6 }); }
+  S.mapFly = false;
+}
+function mountMap() {
+  const slot = $('#mapslot'); if (!slot) return;
+  if (!mapLib()) { slot.innerHTML = `<div class="panel empty">${esc(T('mapFail'))}</div>`; return; }
+  if (!M.map) initMap();
+  slot.appendChild(M.el);
+  M.map.invalidateSize(false);
+  M.el.classList.toggle('pinmode', !!S.pinMode);
+  syncMarkers(); syncSel();
+}
+function pinSheet() {
+  const sh = S.sheet, pn = sh.id ? myPins().find((x) => x.id === sh.id) : null;
+  const lat = pn ? pn.lat : sh.lat, lng = pn ? pn.lng : sh.lng;
+  return sheetWrap(`<h2>★ ${esc(pn ? T('pinEdit') : T('pinNew'))}</h2><p class="small"><span class="pill good">${esc(T('pinPrivate'))}</span></p>
+   <form data-form="pin"${pn ? ` data-id="${esc(pn.id)}"` : ''} style="display:grid;gap:12px">
+   <label class="f">${esc(T('pinName'))}<input type="text" id="pn-name" required maxlength="40" value="${esc(pn ? pn.name : '')}"></label>
+   <label class="f">${esc(T('pinNote'))}<textarea id="pn-note" maxlength="300">${esc(pn ? pn.note : '')}</textarea></label>
+   <div class="two"><label class="f">${esc(T('latLbl'))}<input type="number" id="pn-lat" required step="0.00001" min="20" max="46" value="${lat}"></label><label class="f">${esc(T('lngLbl'))}<input type="number" id="pn-lng" required step="0.00001" min="122" max="154" value="${lng}"></label></div>
+   <p class="err" id="pn-err" role="alert"></p>${btnRow('closesheet', T('save'))}</form>`);
+}
+function catchViewSheet() {
+  const c = (S.data.catches || []).find((x) => x.id === S.sheet.id);
+  if (!c) return '';
+  return sheetWrap(catchCard({ c, info: feedInfo(c.by, catchPref(c)) }, true) + `<div class="row" style="justify-content:flex-end"><button class="btn" data-act="closesheet">${esc(T('close'))}</button></div>`);
 }
 
 /* ---------- chat ---------- */
@@ -606,11 +744,11 @@ function spotRows() {
   return a.spots.filter((s) => (S.spotPref === 'all' || s.pref === S.spotPref) && (!q || (s.en + ' ' + s.ja + ' ' + s.id).toLowerCase().indexOf(q) > -1));
 }
 function spotTable() {
-  const rows = spotRows();
+  const allRows = spotRows(), rows = allRows.slice(0, 150);
   if (!rows.length) return `<div class="panel empty">${esc(T('noSpotsFound'))}</div>`;
   return `<div class="panel tablewrap"><table class="tbl"><thead><tr><th>${esc(T('spotName'))}</th><th>${esc(T('typeLbl'))}</th><th>${esc(T('prefLbl'))}</th><th>${esc(T('usedBy'))}</th><th></th></tr></thead><tbody>${rows.map((s) =>
     `<tr class="${s.active ? '' : 'off'}"><td><b>${esc(s.en)}</b><br><span class="muted small">${esc(s.ja)} · ${esc(s.id)}${s.builtin ? '' : ' · ' + esc(T('customTag'))}</span></td><td>${esc(T('type_' + s.type))}</td><td>${esc(prefName(s.pref))}</td><td class="num">${s.used}</td>
-    <td class="rowbtns"><button class="btn sm" data-act="editspot" data-id="${esc(s.id)}">${esc(T('edit'))}</button><button class="btn sm${s.active ? ' warn' : ''}" data-act="togglespot" data-id="${esc(s.id)}">${esc(s.active ? T('hide') : T('show'))}</button></td></tr>`).join('')}</tbody></table></div>`;
+    <td class="rowbtns"><button class="btn sm" data-act="editspot" data-id="${esc(s.id)}">${esc(T('edit'))}</button><button class="btn sm${s.active ? ' warn' : ''}" data-act="togglespot" data-id="${esc(s.id)}">${esc(s.active ? T('hide') : T('show'))}</button></td></tr>`).join('')}</tbody></table></div>${allRows.length > rows.length ? `<p class="small muted" style="margin-top:8px">${esc(T('showingFirst')(rows.length, allRows.length))}</p>` : ''}`;
 }
 function feedbackList() {
   const a = S.admin, list = a.feedback.filter((f) => S.fbFilter === 'all' || f.status === S.fbFilter);
@@ -638,7 +776,7 @@ function adminView() {
      <div class="panel pad"><b>${esc(T('adm_what'))}</b><p class="muted">${esc(T('adm_whatBody'))}</p><div class="row"><button class="btn primary" data-act="admintab" data-v="spots">${esc(T('adm_spots'))}</button><button class="btn" data-act="admintab" data-v="feedback">${esc(T('adm_feedback'))}</button></div></div>`;
   } else if (S.adminTab === 'spots') {
     const pref = `<option value="all">${esc(T('allPrefs'))}</option>` + D.PREFS.map((p) => `<option value="${p.id}"${S.spotPref === p.id ? ' selected' : ''}>${esc(p[S.lang])}</option>`).join('');
-    body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))}</p><div id="aspots">${spotTable()}</div>`;
+    body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><span class="row" style="gap:8px">${me() && me().owner ? `<button class="btn" data-act="importosm">${esc(T('importOsm'))}</button>` : ''}<button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></span></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))} ${esc(T('importNote'))}</p><div id="aspots">${spotTable()}</div>`;
   } else if (S.adminTab === 'feedback') body = feedbackList();
   else if (S.adminTab === 'admins') {
     const owner = !!me().owner;
@@ -793,6 +931,8 @@ function sheetHtml() {
     case 'spot': return S.admin ? spotSheet() : '';
     case 'feedback': return feedbackSheet();
     case 'inbox': return me() ? inboxSheet() : '';
+    case 'pin': return me() ? pinSheet() : '';
+    case 'catchview': return catchViewSheet();
   }
   return '';
 }
@@ -819,6 +959,7 @@ function mainView() {
     return S.loadError ? `<div class="panel empty"><span>${esc(T('loadError'))}</span><button class="btn primary" data-act="retry">${esc(T('retry'))}</button></div>` : `<div class="panel empty">${esc(T('loading'))}</div>`;
   }
   switch (S.tab) {
+    case 'map': return mapView();
     case 'board': return boardView();
     case 'catches': return catchesView();
     case 'groups': return groupsView();
@@ -834,6 +975,7 @@ function render() {
   document.documentElement.lang = S.lang; document.title = T('brand'); applyTheme();
   $('#app').innerHTML = header() + tabs() + `<main>${mainView()}</main><footer>${esc(T('footer'))} · <button class="linkbtn" data-act="feedback">${esc(T('feedbackBtn'))}</button></footer>` + (S.data ? sheetHtml() : '');
   restoreInputs(keep);
+  if (S.tab === 'map') mountMap();
   S.rendered = true; S.dirty = false;
   const sc = $('#scroller');
   if (sc) { const nowM = S.day === 0 ? new Date().getHours() * 60 + new Date().getMinutes() : 360; sc.scrollLeft = Math.max(0, nowM / 60 * CW - sc.clientWidth / 2); }
@@ -878,6 +1020,20 @@ const A = {
   account() { if (!needLogin()) return false; S.sheet = { k: 'account' }; },
   profile(el) { S.sheet = { k: 'profile', u: el.dataset.u }; },
   feedback() { if (!needLogin()) return false; S.sheet = { k: 'feedback' }; },
+  mapsel(el) { S.mapSel = { t: el.dataset.t, id: el.dataset.id }; S.mapFly = true; },
+  mapclear() { S.mapSel = null; },
+  mapwater(el) { S.mapWater = el.dataset.v; },
+  mappin() { if (!needLogin()) return false; S.pinMode = !S.pinMode; S.mapSel = null; },
+  editpin(el) { S.sheet = { k: 'pin', id: el.dataset.id }; },
+  delpin(el) { if (!confirm(T('confirmDelete'))) return false; api('DELETE', '/api/pins/' + el.dataset.id).then(() => { S.mapSel = null; return load(); }).then(() => render()).catch(fail); return false; },
+  opencatch(el) { S.sheet = { k: 'catchview', id: el.dataset.c }; },
+  sethome(el) { if (!needLogin()) return false; act(api('PATCH', '/api/me', { spot: el.dataset.id }), T('homeSet')); return false; },
+  importosm() {
+    if (!confirm(T('importConfirm'))) return false;
+    toast(T('importing'));
+    api('POST', '/api/admin/import-osm').then((r) => load().then(() => loadAdmin()).then(() => { toast(T('importDone')(r)); render(); })).catch(fail);
+    return false;
+  },
   inbox() {
     if (!needLogin()) return false;
     S.inboxNew = (S.data.inbox || []).filter((m) => !m.read_at).map((m) => m.id);
@@ -896,7 +1052,7 @@ const A = {
   accept(el) { act(api('POST', '/api/posts/' + el.dataset.p + '/accept', { uid: el.dataset.u })); return false; },
   decline(el) { act(api('POST', '/api/posts/' + el.dataset.p + '/decline', { uid: el.dataset.u })); return false; },
   delpost(el) { if (confirm(T(el.dataset.admin ? 'confirmAdminRemove' : 'confirmCancelTrip'))) act(api('DELETE', '/api/posts/' + el.dataset.p)); return false; },
-  delcatch(el) { if (confirm(T(el.dataset.admin ? 'confirmAdminRemove' : 'confirmDelete'))) act(api('DELETE', '/api/catches/' + el.dataset.c)); return false; },
+  delcatch(el) { if (confirm(T(el.dataset.admin ? 'confirmAdminRemove' : 'confirmDelete'))) act(api('DELETE', '/api/catches/' + el.dataset.c)).then(() => { if (S.sheet && S.sheet.k === 'catchview') { closeSheet(); render(); } }); return false; },
   delcomment(el) { if (confirm(T('confirmDelete'))) act(api('DELETE', '/api/comments/' + el.dataset.id)); return false; },
   like(el) { if (!needLogin()) return false; act(api('POST', '/api/catches/' + el.dataset.c + '/like')); return false; },
   togglec(el) { S.openC[el.dataset.c] = !S.openC[el.dataset.c]; if (S.openC[el.dataset.c]) S.focusId = 'cm-' + el.dataset.c; },
@@ -949,6 +1105,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('input', (e) => {
   const id = e.target.id;
   if (id === 'q') { S.q = e.target.value; $('#results').innerHTML = anglerList(); }
+  else if (id === 'mapq') { S.mapQ = e.target.value; S.mapSel = null; const box = $('#mapside'); if (box) box.innerHTML = mapSideHtml(); if (M.map) syncSel(); }
   else if (id === 'aspq') { S.spotQ = e.target.value; const box = $('#aspots'); if (box) box.innerHTML = spotTable(); }
   else if (id === 'r-pw' || id === 'r-pw2') pwRefresh('r-pw', 'r-pw2', 'pw-list', 'r-submit', false);
   else if (id === 'n-pw' || id === 'n-pw2') pwRefresh('n-pw', 'n-pw2', 'pw-list2', 'n-submit', false);
@@ -958,6 +1115,13 @@ document.addEventListener('input', (e) => {
 const val = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
 function setErr(id, e) { const el = document.getElementById(id); if (el) el.textContent = errText(e); }
 const FORMS = {
+  pin(f) {
+    const body = { name: val('pn-name').trim(), note: val('pn-note').trim(), lat: parseFloat(val('pn-lat')), lng: parseFloat(val('pn-lng')) };
+    const id = f.dataset.id;
+    (id ? api('PATCH', '/api/pins/' + id, body).then(() => ({ id })) : api('POST', '/api/pins', body))
+      .then((r) => { closeSheet(); return load().then(() => { S.mapSel = { t: 'pin', id: r.id }; S.mapFly = true; S.tab = 'map'; toast(T('saved')); render(); }); })
+      .catch((e) => setErr('pn-err', e));
+  },
   send(f) {
     const inp = $('#chatin'), text = inp.value.trim(); if (!text) return;
     const room = f.dataset.room; inp.value = '';

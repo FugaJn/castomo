@@ -14,6 +14,7 @@ const scrypt = promisify(crypto.scrypt);
 const D = require('./public/spots.js');
 const { openDb, tx } = require('./db.js');
 const { createForecaster } = require('./marine.js');
+const osm = require('./osm.js');
 
 const PREF_IDS = new Set(D.PREFS.map((p) => p.id));
 const REGION_IDS = new Set(D.REGIONS.map((r) => r.id));
@@ -251,9 +252,10 @@ function createApp(opts = {}) {
       }
     }
     const feedback = user ? q('SELECT id,kind,text,status,note,created_at FROM feedback WHERE user_id=? ORDER BY created_at DESC LIMIT 20').all(uid) : [];
+    const pins = user ? q('SELECT id,name,note,lat,lng,created_at FROM pins WHERE user_id=? ORDER BY created_at DESC').all(uid) : [];
     const inbox = user ? q('SELECT id,kind,body,ref_text,created_at,read_at FROM inbox WHERE user_id=? ORDER BY id DESC LIMIT 50').all(uid) : [];
     const setup = { claimable: !!user && setupCode.length >= 16 && !q("SELECT 1 FROM users WHERE role='owner'").get() };
-    return { me, users, friends, posts, catches, groups, rooms, feedback, inbox, setup, spotsRev };
+    return { me, users, friends, posts, catches, groups, rooms, feedback, inbox, pins, setup, spotsRev };
   }
 
   /* ---------- routes ---------- */
@@ -594,6 +596,37 @@ function createApp(opts = {}) {
   });
 
   /* ---------- feedback (any signed-in user) ---------- */
+  /* ---------- private map pins: only ever returned to the user who made them ---------- */
+  const pinCoords = (b) => {
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!validLat(lat) || !validLng(lng)) throw bad('invalid_coords');
+    return [Math.round(lat * 1e5) / 1e5, Math.round(lng * 1e5) / 1e5];
+  };
+  route('POST', '/api/pins', (c) => {
+    const user = needUser(c), b = c.body;
+    limit('pin:' + user.id, 60, 60000);
+    if (q('SELECT COUNT(*) AS n FROM pins WHERE user_id=?').get(user.id).n >= 200) throw bad('too_many_pins');
+    const name = str(b.name, { min: 1, max: 40, name: 'name' }), note = str(b.note, { max: 300, name: 'note' });
+    const [lat, lng] = pinCoords(b), id = rid();
+    q('INSERT INTO pins(id,user_id,name,note,lat,lng,created_at) VALUES(?,?,?,?,?,?,?)').run(id, user.id, name, note, lat, lng, nowISO());
+    return { id };
+  });
+  route('PATCH', '/api/pins/:id', (c) => {
+    const user = needUser(c), b = c.body;
+    const p = q('SELECT * FROM pins WHERE id=? AND user_id=?').get(c.params.id, user.id);
+    if (!p) throw new HttpError(404, 'not_found');
+    const name = 'name' in b ? str(b.name, { min: 1, max: 40, name: 'name' }) : p.name;
+    const note = 'note' in b ? str(b.note, { max: 300, name: 'note' }) : p.note;
+    const [lat, lng] = ('lat' in b || 'lng' in b) ? pinCoords({ lat: 'lat' in b ? b.lat : p.lat, lng: 'lng' in b ? b.lng : p.lng }) : [p.lat, p.lng];
+    q('UPDATE pins SET name=?, note=?, lat=?, lng=? WHERE id=?').run(name, note, lat, lng, p.id);
+    return {};
+  });
+  route('DELETE', '/api/pins/:id', (c) => {
+    const user = needUser(c);
+    q('DELETE FROM pins WHERE id=? AND user_id=?').run(c.params.id, user.id);
+    return {};
+  });
+
   /* ---------- inbox (messages from admins) ---------- */
   route('POST', '/api/inbox/read', (c) => {
     const user = needUser(c);
@@ -732,6 +765,28 @@ function createApp(opts = {}) {
     return {};
   });
 
+  /* Owner-only: pull fishing spots from OpenStreetMap into the spot list (can take a minute). */
+  let importing = false;
+  route('POST', '/api/admin/import-osm', async (c) => {
+    const user = needAdmin(c);
+    if (!isOwner(user)) throw new HttpError(403, 'forbidden');
+    if (importing) throw new HttpError(409, 'import_running');
+    importing = true;
+    try {
+      const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 170000);
+      let text;
+      try { text = await fetchText(osm.OVERPASS_URL, ctrl.signal); } catch (e) { console.warn('[osm] ' + e.message); throw new HttpError(502, 'import_failed'); } finally { clearTimeout(timer); }
+      let json;
+      try { json = JSON.parse(text); } catch (_) { throw new HttpError(502, 'import_failed'); }
+      const { spots, unnamed } = osm.parseOverpass(json);
+      const r = osm.importSpots(db, tx, spots);
+      if (r.added) spotsRev = Date.now();
+      audit(user, 'spots.import', 'osm', `found ${spots.length}, added ${r.added}`);
+      broadcast();
+      return { found: spots.length, unnamed, added: r.added, duplicates: r.duplicates };
+    } finally { importing = false; }
+  });
+
   /* The whitelist: only accounts whose role is admin or owner can use /api/admin. Only an owner can change it. */
   route('POST', '/api/admin/admins', (c) => {
     const user = needOwner(c);
@@ -753,7 +808,7 @@ function createApp(opts = {}) {
     return {};
   });
 
-  route('GET', '/api/spots', () => ({ rev: spotsRev, spots: q('SELECT id,en,ja,type,pref,mean,a,p,p2,p3,lat,lng,active FROM spots ORDER BY pref, en').all().map((s) => ({ ...s, active: !!s.active })) }));
+  route('GET', '/api/spots', () => ({ rev: spotsRev, spots: q('SELECT id,en,ja,type,pref,mean,a,p,p2,p3,lat,lng,src,active FROM spots ORDER BY pref, en').all().map((s) => ({ ...s, active: !!s.active })) }));
 
   /* Live tide (JMA) and weather (Open-Meteo) for one spot. Public data; cached on the server. */
   route('GET', '/api/forecast/:id', async (c) => {
@@ -776,7 +831,7 @@ function createApp(opts = {}) {
   const SECURITY = {
     ...(cookieSecure ? { 'Strict-Transport-Security': 'max-age=15552000' } : {}),
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://cyberjapandata.gsi.go.jp; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
   };
   function send(res, status, obj, extra) {
     const body = JSON.stringify(obj);

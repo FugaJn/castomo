@@ -34,6 +34,14 @@ async function fetchText(url) {
   if (mock.fail) throw new Error('network down');
   if (url.startsWith('https://www.data.jma.go.jp/')) { const m = /txt\/(\d{4})\//.exec(url); return jmaFile(+m[1]); }
   if (url.startsWith('https://api.open-meteo.com/')) return weatherJson(url);
+  if (url.startsWith('https://overpass-api.de/')) return JSON.stringify({ elements: [
+    { type: 'node', id: 1, lat: 35.0, lng: 0, lon: 136.95, tags: { name: '知多 テスト釣り公園', 'name:en': 'Chita Test Fishing Park', leisure: 'fishing', man_made: 'pier' } },
+    { type: 'way', id: 2, center: { lat: 36.2, lon: 139.1 }, tags: { name: '渡良瀬の釣り場', leisure: 'fishing', water: 'river' } },
+    { type: 'node', id: 3, lat: 35.0, lon: 136.95, tags: { name: 'Same Place Dup', leisure: 'fishing' } },
+    { type: 'node', id: 4, lat: 35.5, lon: 137.0, tags: { leisure: 'fishing' } },
+    { type: 'node', id: 5, lat: 52.0, lon: 0.1, tags: { name: 'Not in Japan', leisure: 'fishing' } },
+    { type: 'node', id: 6, lat: 35.09, lon: 136.89, tags: { name: 'Right on Nagoya Port', leisure: 'fishing' } }
+  ] });
   throw new Error('unexpected url ' + url);
 }
 
@@ -262,4 +270,51 @@ test('admin can fix a spot\'s coordinates', async () => {
   assert.equal((await bob('PATCH', '/api/admin/spots/nagoya', { lat: 35.09, lng: 136.89 })).status, 200);
   const s = (await carol('GET', '/api/spots')).body.spots.find((x) => x.id === 'nagoya');
   assert.equal(s.lat, 35.09);
+});
+
+test('private pins: create, edit, delete; never visible to anyone else', async () => {
+  assert.equal((await client()('POST', '/api/pins', { name: 'x', lat: 35, lng: 137 })).status, 401);
+  assert.equal((await carol('POST', '/api/pins', { name: 'Secret reef', note: 'only me', lat: 34.6123456, lng: 137.0123456 })).status, 200);
+  assert.equal((await carol('POST', '/api/pins', { name: '', lat: 35, lng: 137 })).status, 400);
+  assert.equal((await carol('POST', '/api/pins', { name: 'Abroad', lat: 51.5, lng: -0.1 })).status, 400);
+  const mine = (await carol('GET', '/api/state')).body.pins;
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].lat, 34.61235, 'coordinates are rounded to about 1 m');
+  for (const other of [alice, bob]) {
+    const st = (await other('GET', '/api/state')).body;
+    assert.equal(st.pins.length, 0, 'other users see no pins');
+    assert.ok(!JSON.stringify(st).includes('Secret reef'), 'pin text is not anywhere in another user state');
+  }
+  assert.ok(!JSON.stringify((await bob('GET', '/api/admin/overview')).body).includes('Secret reef'), 'not in the admin dashboard either');
+  const id = mine[0].id;
+  assert.equal((await alice('PATCH', '/api/pins/' + id, { name: 'hacked' })).status, 404);
+  assert.equal((await alice('DELETE', '/api/pins/' + id)).status, 200);
+  assert.equal((await carol('GET', '/api/state')).body.pins.length, 1, 'someone else cannot delete it');
+  assert.equal((await carol('PATCH', '/api/pins/' + id, { name: 'Renamed', note: '' })).status, 200);
+  assert.equal((await carol('GET', '/api/state')).body.pins[0].name, 'Renamed');
+  assert.equal((await carol('DELETE', '/api/pins/' + id)).status, 200);
+  assert.equal((await carol('GET', '/api/state')).body.pins.length, 0);
+});
+
+test('pin limit per user', async () => {
+  const d = client();
+  await d('POST', '/api/register', { nick: 'dave', password: PW });
+  for (let i = 0; i < 60; i++) assert.equal((await d('POST', '/api/pins', { name: 'p' + i, lat: 35, lng: 137 })).status, 200);
+});
+
+test('OpenStreetMap import: owner only, de-duplicates, classifies', async () => {
+  assert.equal((await carol('POST', '/api/admin/import-osm')).status, 403);
+  assert.equal((await bob('POST', '/api/admin/import-osm')).status, 403, 'admins are not enough, owner only');
+  const r = await alice('POST', '/api/admin/import-osm');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.found, 4, 'unnamed and non-Japan elements are dropped');
+  assert.equal(r.body.unnamed, 1);
+  assert.equal(r.body.added, 2, 'the two that are not within 300 m of an existing spot');
+  const spots = (await carol('GET', '/api/spots')).body.spots;
+  const a = spots.find((s) => s.id === 'osm-node-1'), b = spots.find((s) => s.id === 'osm-way-2');
+  assert.equal(a.type, 's'); assert.equal(a.en, 'Chita Test Fishing Park'); assert.equal(a.ja, '知多 テスト釣り公園'); assert.equal(a.pref, 'aichi'); assert.equal(a.src, 'osm');
+  assert.equal(b.type, 'f');
+  const again = await alice('POST', '/api/admin/import-osm');
+  assert.equal(again.body.added, 0, 'running it again adds nothing');
+  assert.equal(spots.find((s) => s.id === 'osm-node-6'), undefined);
 });
