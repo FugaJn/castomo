@@ -1,11 +1,11 @@
-/* Castomo styles. Washi-paper light theme with indigo ink, charcoal and lantern-amber dark theme. Fonts: Zen Kaku Gothic New (text), Shippori Mincho B1 (headings). */
+/* Castomo styles. Washi-paper light theme with indigo ink, charcoal and lantern-amber dark theme. Font: Noto Sans (Noto Sans JP for Japanese). */
 :root{
   --bg:#F3EEE3; --surface:#FBF8F1; --surface-2:#EAE3D4; --ink:#22262B; --muted:#6A6558; --line:#D9D0BC;
   --accent:#27466B; --accent-ink:#FBF8F1; --accent-soft:#DDE4EA;
   --warn:#B5412A; --warn-soft:#F4DDD3; --good:#3F6B3A; --good-soft:#DFE8D5;
   --night:rgba(34,38,43,.07);
-  --font:'Zen Kaku Gothic New','Hiragino Sans','Yu Gothic',system-ui,-apple-system,sans-serif;
-  --font-head:'Shippori Mincho B1','Hiragino Mincho ProN','Yu Mincho',Georgia,serif;
+  --font:'Noto Sans','Noto Sans JP','Hiragino Sans','Yu Gothic',system-ui,-apple-system,sans-serif;
+  --font-head:var(--font);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
