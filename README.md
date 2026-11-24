@@ -83,3 +83,13 @@ Disks are only available on paid services, and a service with a disk cannot run 
 - **Import (owner):** Admin → Spots → *Import from OpenStreetMap* now also finds places by name (海釣り, 釣り公園, 釣り場, 釣り堀, Fishing Park/Pier and so on) in addition to places tagged as fishing. Run it again after updating. Imported spots can be edited or hidden like any other.
 - **New spots from photos:** when a catch photo contains GPS data, the browser reads it (the uploaded picture is still stripped of all location data) and sends the coordinates with the catch. If the place is not within 600 m of a listed spot, it is counted toward a hidden candidate place. Once a candidate has at least 10 posts from at least 3 different anglers, it appears in **Admin → New spots** and as a `?` pin on admins' maps. Nobody else can see it. Admins give it a name, type and prefecture and press *Make public*, or *Reject* (photos from a rejected place are no longer counted). Coordinates are never shown to ordinary users. Tune the thresholds with `CANDIDATE_MIN_POSTS` and `CANDIDATE_MIN_ANGLERS`.
 - Deleting a catch also removes its contribution to a candidate.
+
+## Base maps
+
+The map uses Leaflet with three base layers, chosen with the buttons under the map (the choice is remembered per browser):
+
+- **Map** (default): OpenFreeMap vector tiles (`tiles.openfreemap.org`, free, no key) drawn with MapLibre GL, bundled in `public/vendor/maplibre`. Labels follow the site language: English uses `name:en` and falls back to the local name where no English name exists in OpenStreetMap; Japanese uses `name:ja`.
+- **GSI**: Geospatial Information Authority of Japan standard map.
+- **Satellite**: GSI seamless aerial photos.
+
+If OpenFreeMap cannot be reached or the browser has no WebGL, the map switches to GSI automatically. The Content-Security-Policy in `server.js` allows `tiles.openfreemap.org` and `cyberjapandata.gsi.go.jp`. Attribution for each source is shown on the map; keep it.

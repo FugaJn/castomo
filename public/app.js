@@ -551,14 +551,53 @@ function mapView() {
    <div class="chips">${chip('all', 'waterAll')}${chip('salt', 'waterSalt')}${chip('fresh', 'waterFresh')}</div>
    <button class="btn${S.pinMode ? ' warn' : ' primary'}" data-act="mappin">${esc(S.pinMode ? T('cancel') : '★ ' + T('mapAddPin'))}</button></div>
    ${S.pinMode ? `<p class="pinhelp">${esc(T('mapPinHelp'))}</p>` : ''}
-   <div class="maplayout"><div><div id="mapslot" class="mapslot"></div><div class="legend small muted">${legend}<span class="grow"></span><span>${esc(T('mapCount')(mapSpots().length))}</span></div></div>
+   <div class="maplayout"><div><div id="mapslot" class="mapslot"></div><div class="legend small muted">${legend}<span class="grow"></span><span class="chips" role="group" aria-label="${esc(T('mapBaseLbl'))}">${BASES.map((v) => `<button class="chip" data-act="mapbase" data-v="${v}" aria-pressed="${v === (M.baseKey || mapBase())}">${esc(T('mapBase_' + v))}</button>`).join('')}</span><span>${esc(T('mapCount')(mapSpots().length))}</span></div></div>
    <aside class="mapside panel" id="mapside">${mapSideHtml()}</aside></div></section>`;
 }
+/* Base maps: OpenFreeMap (vector, labels follow the site language) is the default; GSI standard and aerial photos are the alternatives. */
+const BASES = ['openfree', 'gsi', 'photo'];
+const GSI_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">出典:国土地理院 / GSI Japan</a>';
+const OSM_NOTE = ' · Imported spots © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+const OF_ATTR = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+function mapBase() { let b = null; try { b = localStorage.getItem('castomo.base'); } catch (e) { /* storage blocked */ } return BASES.includes(b) ? b : 'openfree'; }
+function applyMapLang() {
+  const gl = M.gl; if (!gl || !M.glOk) return;
+  const expr = S.lang === 'ja' ? ['coalesce', ['get', 'name:ja'], ['get', 'name']] : ['coalesce', ['get', 'name:en'], ['get', 'name:latin'], ['get', 'name']];
+  try {
+    (gl.getStyle().layers || []).forEach((l) => {
+      const tf = l.layout && l.layout['text-field'];
+      if (l.type === 'symbol' && tf && JSON.stringify(tf).includes('name') && !/housenumber/.test(l.id)) gl.setLayoutProperty(l.id, 'text-field', expr);
+    });
+    M.glLang = S.lang;
+  } catch (e) { /* style not ready yet */ }
+}
+function setBase(b) {
+  if (M.layer) { M.map.removeLayer(M.layer); M.layer = null; }
+  M.gl = null; M.glOk = false; M.baseKey = b;
+  if (b === 'openfree' && window.maplibregl && L.maplibreGL) {
+    try {
+      window.maplibregl.setWorkerUrl('/vendor/maplibre/maplibre-gl-csp-worker.js');
+      const layer = L.maplibreGL({ style: 'https://tiles.openfreemap.org/styles/liberty', attribution: OF_ATTR + OSM_NOTE });
+      layer.addTo(M.map); M.layer = layer;
+      const gl = layer.getMaplibreMap(); M.gl = gl;
+      const giveUp = () => { if (M.layer === layer && !M.glOk) { M.baseKey = 'gsi'; setBase('gsi'); syncBaseChips(); } };
+      gl.on('load', () => { M.glOk = true; applyMapLang(); });
+      gl.on('styledata', () => { if (M.glOk) applyMapLang(); });
+      gl.on('error', () => { if (!M.glOk) giveUp(); });
+      setTimeout(giveUp, 15000);
+      return;
+    } catch (e) { M.layer = null; M.gl = null; b = 'gsi'; M.baseKey = 'gsi'; }
+  }
+  const photo = b === 'photo';
+  M.layer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/' + (photo ? 'seamlessphoto/{z}/{x}/{y}.jpg' : 'std/{z}/{x}/{y}.png'), { maxZoom: 18, attribution: GSI_ATTR + OSM_NOTE }).addTo(M.map);
+  M.layer.bringToBack();
+}
+function syncBaseChips() { document.querySelectorAll('[data-act=mapbase]').forEach((c) => c.setAttribute('aria-pressed', String(c.dataset.v === (M.baseKey || mapBase())))); }
 function initMap() {
   M.el = document.createElement('div'); M.el.className = 'leafmap';
   const home = SM[homeSpotId()];
   M.map = L.map(M.el, { center: home && home.lat != null ? [home.lat, home.lng] : [36.5, 138], zoom: home && home.lat != null ? 9 : 5, minZoom: 5, maxZoom: 18, preferCanvas: true });
-  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">出典:国土地理院 / GSI Japan</a> · Imported spots © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors' }).addTo(M.map);
+  setBase(mapBase());
   M.cluster = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45, chunkedLoading: true, disableClusteringAtZoom: 13 }).addTo(M.map);
   M.pinLayer = L.layerGroup().addTo(M.map);
   M.selLayer = L.layerGroup().addTo(M.map);
@@ -609,6 +648,7 @@ function mountMap() {
   slot.appendChild(M.el);
   M.map.invalidateSize(false);
   M.el.classList.toggle('pinmode', !!S.pinMode);
+  if (M.gl && M.glOk && M.glLang !== S.lang) applyMapLang();
   syncMarkers(); syncSel();
 }
 function pinSheet() {
@@ -1122,6 +1162,7 @@ const A = {
   mapsel(el) { S.mapSel = { t: el.dataset.t, id: el.dataset.id }; S.mapFly = true; },
   mapclear() { S.mapSel = null; },
   mapwater(el) { S.mapWater = el.dataset.v; },
+  mapbase(el) { const v = el.dataset.v; try { localStorage.setItem('castomo.base', v); } catch (e) { /* storage blocked */ } if (M.map) { setBase(v); syncBaseChips(); } return false; },
   mappin() { if (!needLogin()) return false; S.pinMode = !S.pinMode; S.mapSel = null; },
   editpin(el) { S.sheet = { k: 'pin', id: el.dataset.id }; },
   delpin(el) { if (!confirm(T('confirmDelete'))) return false; api('DELETE', '/api/pins/' + el.dataset.id).then(() => { S.mapSel = null; return load(); }).then(() => render()).catch(fail); return false; },
