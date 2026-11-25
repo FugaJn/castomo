@@ -1,4 +1,6 @@
 'use strict';
+/* Node's default gives each connection attempt only 250 ms, which is too short from servers far from the data sources (Overpass, JMA, Open-Meteo) and shows up as ETIMEDOUT. */
+try { const net = require('node:net'); if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') net.setDefaultAutoSelectFamilyAttemptTimeout(5000); } catch (_) { /* older Node */ }
 /*
  * Castomo server. Node 22.5+, no npm dependencies.
  *  - JSON API under /api, static client from /public
@@ -928,11 +930,11 @@ function createApp(opts = {}) {
     const delay = opts.importDelayMs != null ? opts.importDelayMs : 2000;
     try {
       for (const region of osm.REGIONS) {
-        let json = null;
+        let json = null; const errs = [];
         for (const ep of osm.ENDPOINTS) {
           const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 110000);
           try { json = JSON.parse(await fetchText(osm.urlFor(ep, region), ctrl.signal)); if (!json || !Array.isArray(json.elements)) throw new Error('unexpected response'); break; }
-          catch (e) { json = null; impJob.lastError = new URL(ep).host + ': ' + String(e.cause && e.cause.code || e.message).slice(0, 80); console.warn('[osm] ' + region[0] + ' via ' + impJob.lastError + ' (' + e.message + ')'); }
+          catch (e) { json = null; const why = new URL(ep).host.replace(/^overpass[.-]?/, '').replace(/\.[a-z]+$/, '') + ': ' + String(e.cause && e.cause.code || e.message).slice(0, 40); errs.push(why); console.warn('[osm] ' + region[0] + ' via ' + new URL(ep).host + ': ' + e.message + (e.cause && e.cause.code ? ' (' + e.cause.code + ')' : '')); }
           finally { clearTimeout(timer); }
         }
         if (json) {
@@ -940,7 +942,7 @@ function createApp(opts = {}) {
           const r = osm.importSpots(db, tx, spots);
           impJob.found += spots.length; impJob.unnamed += unnamed; impJob.added += r.added; impJob.duplicates += r.duplicates;
           if (r.added) { spotsRev = Date.now(); broadcast(); }
-        } else impJob.failed.push(region[0]);
+        } else { impJob.failed.push(region[0]); impJob.lastError = errs.join('; '); }
         impJob.done++;
         if (delay) await sleep(delay);
       }
