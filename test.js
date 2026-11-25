@@ -435,3 +435,28 @@ test('new spots: photo locations build an admin-only candidate that can be appro
   for (let i = 0; i < 12; i++) await post(who[i % 3], day2, 139.0);
   assert.equal((await bob('GET', '/api/admin/overview')).body.candidates.length, 0);
 });
+
+
+test('profile: avatar upload/replace/remove and own history', async () => {
+  const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDNooor1zwz/9k=';
+  const up = await alice('POST', '/api/me/avatar', { photo });
+  assert.equal(up.status, 200);
+  assert.match(up.body.avatar, /^\/uploads\/[0-9a-f]+\.jpg$/);
+  let st = (await bob('GET', '/api/state')).body;
+  assert.equal(st.users.find((u) => u.nick === 'alice').avatar, up.body.avatar);
+  assert.equal((await alice('GET', '/api/state')).body.me.avatar, up.body.avatar);
+  assert.equal((await fetch(base + up.body.avatar)).status, 200);
+  assert.equal((await alice('POST', '/api/me/avatar', { photo: 'data:image/png;base64,AAAA' })).status, 400);
+  assert.equal((await fetch(base + '/api/me/avatar', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
+  const up2 = await alice('POST', '/api/me/avatar', { photo });
+  assert.notEqual(up2.body.avatar, up.body.avatar);
+  assert.equal((await fetch(base + up.body.avatar)).status, 404, 'old picture file is deleted');
+  assert.equal((await alice('DELETE', '/api/me/avatar')).status, 200);
+  assert.equal((await alice('GET', '/api/state')).body.me.avatar, '');
+  const h = await alice('GET', '/api/me/history');
+  assert.equal(h.status, 200);
+  assert.ok(h.body.items.length > 0);
+  for (let i = 1; i < h.body.items.length; i++) assert.ok(h.body.items[i - 1].at >= h.body.items[i].at, 'newest first');
+  assert.ok(h.body.items.every((x) => x.k === 'post' || x.k === 'catch'));
+  assert.equal((await fetch(base + '/api/me/history')).status, 401);
+});

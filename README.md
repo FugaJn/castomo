@@ -93,3 +93,13 @@ The map uses Leaflet with three base layers, chosen with the buttons under the m
 - **Satellite**: GSI seamless aerial photos.
 
 If OpenFreeMap cannot be reached or the browser has no WebGL, the map switches to GSI automatically. The Content-Security-Policy in `server.js` allows `tiles.openfreemap.org` and `cyberjapandata.gsi.go.jp`. Attribution for each source is shown on the map; keep it.
+
+## My profile page
+
+Clicking your name in the header (or anywhere your own name appears) opens your profile page:
+
+- **Profile picture:** upload a photo (cropped to a square and shrunk in the browser) or remove it. It is stored in `DATA_DIR/uploads`, replaced files are deleted, and it shows next to your name everywhere.
+- **Appearance:** Auto / Light / Dark. The choice is remembered in the browser. Visitors who are not logged in still see the theme switch in the header.
+- **Your activity:** trips you host or joined and catches you posted, newest first, with filters. API: `GET /api/me/history`.
+
+The database adds an `avatar` column on start (schema v8).

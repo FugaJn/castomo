@@ -65,7 +65,7 @@ const userPref = (u) => (u && u.spot ? spotOf(u.spot).pref : '');
 const friends = () => (S.data && S.data.friends) || { accepted: [], incoming: [], outgoing: [] };
 const isFriend = (id) => friends().accepted.indexOf(id) > -1;
 const avHue = (u) => D.hash(u.nick || u.id || '?') % 360;
-const av = (u, cls) => `<span class="av ${cls || ''}" style="--h:${avHue(u)}">${esc(String(u.nick || '?').trim().charAt(0).toUpperCase())}</span>`;
+const av = (u, cls) => (u.avatar ? `<span class="av ${cls || ''}"><img src="${esc(u.avatar)}" alt="" loading="lazy"></span>` : `<span class="av ${cls || ''}" style="--h:${avHue(u)}">${esc(String(u.nick || '?').trim().charAt(0).toUpperCase())}</span>`);
 const profLink = (u) => (u.id ? `<button class="linkbtn" data-act="profile" data-u="${esc(u.id)}">${esc(u.nick)}</button>` : `<span class="muted">${esc(u.nick)}</span>`);
 function dateStr(d, long) {
   const o = long ? { weekday: 'short', month: 'short', day: 'numeric' } : { weekday: 'short', month: 'numeric', day: 'numeric' };
@@ -218,9 +218,9 @@ function header() {
   <div class="bar-r">
     ${m ? `<button class="btn sm" data-act="inbox">${esc(T('inboxBtn'))}${unreadCount() ? `<span class="dot" aria-label="${esc(T('unreadLbl'))}">${unreadCount()}</span>` : ''}</button>` : ''}
     <button class="btn sm" data-act="feedback">${esc(T('feedbackBtn'))}</button>
-    <div class="seg" role="group" aria-label="${esc(T('themeLbl'))}">${seg('theme', S.theme, [['auto', T('theme_auto')], ['light', T('theme_light')], ['dark', T('theme_dark')]])}</div>
+    ${m ? '' : `<div class="seg" role="group" aria-label="${esc(T('themeLbl'))}">${seg('theme', S.theme, [['auto', T('theme_auto')], ['light', T('theme_light')], ['dark', T('theme_dark')]])}</div>`}
     <div class="seg" role="group" aria-label="Language">${seg('lang', S.lang, [['en', 'EN'], ['ja', '日本語']])}</div>
-    ${m ? `<button class="btn" data-act="account">${av(m)}<span>${esc(m.nick)}</span>${m.admin ? `<span class="pill">${esc(T('adminTag'))}</span>` : ''}</button>`
+    ${m ? `<button class="btn" data-act="myprofile" aria-label="${esc(T('myProfile'))}">${av(m)}<span>${esc(m.nick)}</span>${m.admin ? `<span class="pill">${esc(T('adminTag'))}</span>` : ''}</button>`
       : `<button class="btn primary" data-act="login">${esc(T('logIn'))}</button><button class="btn" data-act="register">${esc(T('signUp'))}</button>`}
   </div></header>`;
 }
@@ -752,6 +752,53 @@ function anglerList() {
      <div class="row" style="justify-content:space-between"><span class="muted small">${esc(T('tripsDone')(u.trips))}</span>${self ? '' : `<button class="btn sm" data-act="profile" data-u="${esc(u.id)}">${esc(T('message'))}</button>`}</div></article>`;
   }).join('')}</div>` : `<div class="panel empty" style="margin-top:14px">${esc(T('noOne'))}</div>`);
 }
+/* ---------- my profile page ---------- */
+function profileView() {
+  const m = me(); if (!m) return `<section><div class="panel empty">${esc(T('needLogin'))}</div></section>`;
+  const seg = ([v, label]) => `<button data-act="theme" data-v="${v}" aria-pressed="${S.theme === v}">${esc(label)}</button>`;
+  const h = S.hist, f = S.histF || 'all';
+  const chip = (v, k) => `<button class="chip" data-act="histfilter" data-v="${v}" aria-pressed="${f === v}">${esc(T(k))}</button>`;
+  const catches = new Set((S.data.catches || []).map((c) => c.id));
+  const rows = !h ? `<div class="panel empty">${esc(T('loading'))}</div>` : (h.items.filter((x) => f === 'all' || (f === 'trips' ? x.k === 'post' : x.k === 'catch')).map((x) => {
+    const when = esc(timeStr(x.at));
+    if (x.k === 'catch') {
+      const open = catches.has(x.id);
+      const pic = x.photo ? `<img src="${esc(x.photo)}" alt="" loading="lazy">` : '🎣';
+      return `<article class="panel hist"><${open ? `button class="histpic" data-act="opencatch" data-c="${esc(x.id)}" aria-label="${esc(fName(x.fish))}"` : 'span class="histpic"'}>${pic}</${open ? 'button' : 'span'}>
+        <div class="grow"><div class="row" style="justify-content:space-between;gap:8px"><b>${esc(fName(x.fish))}${x.size ? ` · <span class="num">${x.size} cm</span>` : ''}</b><span class="muted small num">${when}</span></div>
+        <div class="small muted">${esc(locName(x.loc))} · ${esc(dateStr(parseD(x.date)))}</div>${x.cap ? `<div class="small">${esc(x.cap)}</div>` : ''}
+        <div class="small muted">♥ ${x.likes} · 💬 ${x.comments}</div></div></article>`;
+    }
+    const tr = { car: 'optCar', ride: 'optRide', transit: 'optTransit' }[x.transport];
+    return `<article class="panel hist"><span class="histpic">🚗</span><div class="grow"><div class="row" style="justify-content:space-between;gap:8px"><b>${esc(postSpot(x))} · ${esc(dateStr(parseD(x.date)))} ${esc(x.time)}</b><span class="muted small num">${when}</span></div>
+      <div class="small"><span class="pill">${esc(T(x.role === 'host' ? 'roleHost' : 'roleJoined'))}</span> <span class="pill">${esc(fName(x.fish))}</span> <span class="pill">${esc(T(tr))}</span> <span class="muted">${esc(T('goingCount')(x.members))}</span></div>
+      ${x.note ? `<div class="small muted">${esc(x.note)}</div>` : ''}</div></article>`;
+  }).join('') || `<div class="panel empty">${esc(T('histEmpty'))}</div>`);
+  return `<section class="mypage">
+   <div class="panel myhead"><div class="row" style="flex-wrap:nowrap;gap:16px">${av(m, 'xl')}<div style="min-width:0"><h2>${esc(m.nick)}${m.admin ? ` <span class="pill">${esc(T('adminTag'))}</span>` : ''}</h2>
+     <div class="muted small">${m.name ? esc(m.name) + ' · ' : ''}${esc(sName(m.spot))}</div>${m.bio ? `<p class="small" style="margin:6px 0 0">${esc(m.bio)}</p>` : ''}</div></div>
+    <div class="row" style="gap:8px"><label class="btn sm primary" for="av-file" tabindex="0">${esc(T('changePic'))}</label><input type="file" id="av-file" accept="image/*" hidden>${m.avatar ? `<button class="btn sm" data-act="delavatar">${esc(T('removePic'))}</button>` : ''}<button class="btn sm" data-act="account">${esc(T('editProfile'))}</button></div></div>
+   <div class="panel"><b class="small muted">${esc(T('appearance'))}</b><div class="seg" role="group" aria-label="${esc(T('themeLbl'))}" style="margin-top:8px;margin-left:0">${[['auto', T('theme_auto')], ['light', T('theme_light')], ['dark', T('theme_dark')]].map(seg).join('')}</div></div>
+   <div class="row" style="justify-content:space-between;gap:8px"><h3>${esc(T('yourActivity'))}</h3><div class="chips">${chip('all', 'hist_all')}${chip('trips', 'hist_trips')}${chip('catches', 'hist_catches')}</div></div>
+   <div class="histlist">${rows}</div></section>`;
+}
+function loadHistory() { api('GET', '/api/me/history').then((r) => { S.hist = r; render(); }).catch(() => { S.hist = { items: [] }; render(); }); }
+function cropSquare(file, size) {
+  return new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const side = Math.min(img.width, img.height), c = document.createElement('canvas');
+        c.width = c.height = size;
+        c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+        res(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => res(null); img.src = fr.result;
+    };
+    fr.onerror = () => res(null); fr.readAsDataURL(file);
+  });
+}
 function anglersView() {
   const inc = friends().incoming;
   const req = me() && inc.length ? `<div class="panel reqbox"><b>${esc(T('friendReqs'))} (${inc.length})</b>${inc.map((id) => { const u = userOf(id); return `<div class="row" style="justify-content:space-between">${`<span class="row" style="gap:8px">${av(u)}${profLink(u)}</span>`}<span class="row" style="gap:6px"><button class="btn sm primary" data-act="friendaccept" data-u="${esc(id)}">${esc(T('accept'))}</button><button class="btn sm" data-act="friendremove" data-u="${esc(id)}">${esc(T('decline'))}</button></span></div>`; }).join('')}</div>` : '';
@@ -1052,6 +1099,7 @@ function mainView() {
     case 'groups': return groupsView();
     case 'chat': return chatView();
     case 'anglers': return anglersView();
+    case 'profile': return profileView();
     case 'admin': return adminView();
   }
   return tideView();
@@ -1139,7 +1187,10 @@ const A = {
   login() { S.sheet = { k: 'auth', mode: 'login', why: '' }; }, register() { S.sheet = { k: 'auth', mode: 'register', why: '' }; },
   authmode(el) { S.sheet.mode = el.dataset.v; },
   account() { if (!needLogin()) return false; S.sheet = { k: 'account' }; },
-  profile(el) { S.sheet = { k: 'profile', u: el.dataset.u }; },
+  profile(el) { if (me() && el.dataset.u === myId()) { S.sheet = null; S.tab = 'profile'; S.hist = null; loadHistory(); return; } S.sheet = { k: 'profile', u: el.dataset.u }; },
+  myprofile() { if (!needLogin()) return false; S.sheet = null; S.tab = 'profile'; S.hist = null; loadHistory(); },
+  histfilter(el) { S.histF = el.dataset.v; },
+  delavatar() { api('DELETE', '/api/me/avatar').then(() => load()).catch(fail); return false; },
   feedback() { if (!needLogin()) return false; S.sheet = { k: 'feedback' }; },
   report(el) { if (!needLogin()) return false; S.sheet = { k: 'report', t: el.dataset.t, id: el.dataset.id }; },
   repfilter(el) { S.repFilter = el.dataset.v; },
@@ -1236,7 +1287,10 @@ document.addEventListener('change', (e) => {
   else if (id === 'aspp') { S.spotPref = t.value; render(); }
   else if (id === 'p-spot') customWrap('p-customwrap', 'p-custom')(e);
   else if (id === 'c-loc') customWrap('c-customwrap', 'c-custom')(e);
-  else if (id === 'c-file') {
+  else if (id === 'av-file') {
+    const f = t.files && t.files[0]; t.value = ''; if (!f) return;
+    cropSquare(f, 256).then((url) => { if (!url) { toast(T('err_invalid_photo'), 'bad'); return; } return api('POST', '/api/me/avatar', { photo: url }).then(() => load()); }).catch(fail);
+  } else if (id === 'c-file') {
     const f = t.files && t.files[0]; S.photo = null; const pv = $('#c-prev'); if (pv) pv.hidden = true;
     if (f) { S.gps = null; readGps(f).then((g) => { S.gps = g; const gn = $('#c-gps'); if (gn) gn.hidden = !g; }); }
     if (f) resizeImage(f).then((url) => { S.photo = url; if (url && pv) { pv.src = url; pv.hidden = false; } else if (!url) toast(T('err_invalid_photo'), 'bad'); });

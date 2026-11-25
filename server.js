@@ -210,9 +210,9 @@ function createApp(opts = {}) {
   }
   function buildState(user) {
     const uid = user ? user.id : '';
-    const users = q('SELECT u.id,u.nick,u.name,u.spot,u.style,u.target,u.bio,u.langs,u.fish,(SELECT COUNT(*) FROM post_members pm WHERE pm.user_id=u.id) AS trips FROM users u ORDER BY u.created_at').all()
-      .map((u) => ({ id: u.id, nick: u.nick, name: u.name, spot: u.spot, style: u.style, target: u.target, bio: u.bio, langs: json(u.langs, []), fish: json(u.fish, []), trips: u.trips }));
-    const me = user ? { id: user.id, nick: user.nick, name: user.name, email: user.email, spot: user.spot, style: user.style, target: user.target, bio: user.bio, role: user.role, admin: isAdmin(user), owner: isOwner(user) } : null;
+    const users = q('SELECT u.id,u.nick,u.name,u.avatar,u.spot,u.style,u.target,u.bio,u.langs,u.fish,(SELECT COUNT(*) FROM post_members pm WHERE pm.user_id=u.id) AS trips FROM users u ORDER BY u.created_at').all()
+      .map((u) => ({ id: u.id, nick: u.nick, name: u.name, avatar: u.avatar ? '/uploads/' + u.avatar : '', spot: u.spot, style: u.style, target: u.target, bio: u.bio, langs: json(u.langs, []), fish: json(u.fish, []), trips: u.trips }));
+    const me = user ? { id: user.id, nick: user.nick, name: user.name, avatar: user.avatar ? '/uploads/' + user.avatar : '', email: user.email, spot: user.spot, style: user.style, target: user.target, bio: user.bio, role: user.role, admin: isAdmin(user), owner: isOwner(user) } : null;
 
     const friends = { accepted: [], incoming: [], outgoing: [] };
     if (user) {
@@ -352,6 +352,38 @@ function createApp(opts = {}) {
     return {};
   });
 
+  /* ---------- profile picture and own history ---------- */
+  route('POST', '/api/me/avatar', (c) => {
+    const user = needUser(c);
+    limit('avatar:' + user.id, 20, 3600000);
+    const name = savePhoto(c.body.photo);
+    const old = q('SELECT avatar FROM users WHERE id=?').get(user.id).avatar;
+    q('UPDATE users SET avatar=? WHERE id=?').run(name, user.id);
+    if (old) fs.rm(path.join(uploadDir, old), { force: true }, () => {});
+    broadcast();
+    return { avatar: '/uploads/' + name };
+  });
+  route('DELETE', '/api/me/avatar', (c) => {
+    const user = needUser(c);
+    const old = q('SELECT avatar FROM users WHERE id=?').get(user.id).avatar;
+    q("UPDATE users SET avatar='' WHERE id=?").run(user.id);
+    if (old) fs.rm(path.join(uploadDir, old), { force: true }, () => {});
+    broadcast();
+    return {};
+  });
+  route('GET', '/api/me/history', (c) => {
+    const user = needUser(c);
+    const posts = q(`SELECT p.id,p.host,p.date,p.time,p.spot,p.custom,p.fish,p.transport,p.note,p.created_at,
+        (SELECT COUNT(*) FROM post_members m WHERE m.post_id=p.id) AS members
+      FROM posts p WHERE p.host=? OR EXISTS(SELECT 1 FROM post_members m WHERE m.post_id=p.id AND m.user_id=?) ORDER BY p.created_at DESC LIMIT 200`).all(user.id, user.id)
+      .map((p) => ({ k: 'post', id: p.id, role: p.host === user.id ? 'host' : 'member', date: p.date, time: p.time, spot: p.spot, custom: p.custom, fish: p.fish, transport: p.transport, note: p.note, members: p.members, at: p.created_at }));
+    const catches = q(`SELECT c.id,c.when_date,c.loc_k,c.loc_v,c.fish,c.size,c.photo,c.cap,c.created_at,
+        (SELECT COUNT(*) FROM catch_likes l WHERE l.catch_id=c.id) AS likes, (SELECT COUNT(*) FROM catch_comments m WHERE m.catch_id=c.id) AS comments
+      FROM catches c WHERE c.by_user=? ORDER BY c.created_at DESC LIMIT 200`).all(user.id)
+      .map((x) => ({ k: 'catch', id: x.id, date: x.when_date, loc: { k: x.loc_k, v: x.loc_v }, fish: x.fish, size: x.size, photo: x.photo ? '/uploads/' + x.photo : '', cap: x.cap, likes: x.likes, comments: x.comments, at: x.created_at }));
+    return { items: posts.concat(catches).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)) };
+  });
+
   route('DELETE', '/api/me', async (c) => {
     const user = needUser(c);
     limit('pwchange:' + user.id, 10, 900000);
@@ -365,6 +397,7 @@ function createApp(opts = {}) {
       }
       for (const p of q('SELECT id FROM posts WHERE host=?').all(user.id)) { q('DELETE FROM messages WHERE room=?').run('post-' + p.id); q('DELETE FROM reads WHERE room=?').run('post-' + p.id); }
       for (const ct of q("SELECT photo FROM catches WHERE by_user=? AND photo<>''").all(user.id)) fs.rm(path.join(uploadDir, ct.photo), { force: true }, () => {});
+      if (user.avatar) fs.rm(path.join(uploadDir, user.avatar), { force: true }, () => {});
       q("DELETE FROM messages WHERE room LIKE 'dm-%' AND (room LIKE ? OR room LIKE ?)").run(`dm-${user.id}-%`, `dm-%-${user.id}`);
       q('DELETE FROM users WHERE id=?').run(user.id);
     });

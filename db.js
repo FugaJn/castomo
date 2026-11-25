@@ -269,6 +269,10 @@ function openDb(file) {
     CREATE INDEX hits_cand ON spot_hits(cand_id);
     PRAGMA user_version=7`);
   });
+  /* v8: profile pictures */
+  if (v < 8) tx(db, () => {
+    db.exec(`ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''; PRAGMA user_version=8`);
+  });
   seedSpots(db);
   /* Fill missing coordinates for built-in spots only; an admin's own edits are never overwritten. */
   const fill = db.prepare('UPDATE spots SET lat=?, lng=? WHERE id=? AND lat IS NULL');
