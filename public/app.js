@@ -123,6 +123,14 @@ function load(push) {
   }).catch(() => { if (!S.loaded) { S.loadError = true; render(); } })
     .then(() => { loading = false; if (again) { const p = againPush; again = false; againPush = false; load(p); } });
 }
+function pollImport() {
+  clearTimeout(S.impT);
+  S.impT = setTimeout(() => api('GET', '/api/admin/import-osm').then((j) => {
+    S.imp = j;
+    if (j.state === 'running') { render(); pollImport(); return; }
+    return load().then(() => loadAdmin()).then(() => { toast(j.failed.length >= j.total ? T('err_import_failed') : T('importDone')(j), j.failed.length ? 'bad' : undefined); render(); });
+  }).catch(() => pollImport()), 3000);
+}
 function loadAdmin(push) {
   if (!isAdmin()) return Promise.resolve();
   return api('GET', '/api/admin/overview').then((a) => {
@@ -871,7 +879,7 @@ function adminView() {
      <div class="panel pad"><b>${esc(T('adm_what'))}</b><p class="muted">${esc(T('adm_whatBody'))}</p><div class="row"><button class="btn primary" data-act="admintab" data-v="spots">${esc(T('adm_spots'))}</button><button class="btn" data-act="admintab" data-v="feedback">${esc(T('adm_feedback'))}</button></div></div>`;
   } else if (S.adminTab === 'spots') {
     const pref = `<option value="all">${esc(T('allPrefs'))}</option>` + D.PREFS.map((p) => `<option value="${p.id}"${S.spotPref === p.id ? ' selected' : ''}>${esc(p[S.lang])}</option>`).join('');
-    body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><span class="row" style="gap:8px">${me() && me().owner ? `<button class="btn" data-act="importosm">${esc(T('importOsm'))}</button>` : ''}<button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></span></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))} ${esc(T('importNote'))}</p><div id="aspots">${spotTable()}</div>`;
+    body = `<div class="boardbar"><div class="filters"><input type="text" id="aspq" value="${esc(S.spotQ)}" placeholder="${esc(T('searchSpots'))}" aria-label="${esc(T('searchSpots'))}" autocomplete="off"><select id="aspp" aria-label="${esc(T('prefLbl'))}">${pref}</select><span></span></div><span class="row" style="gap:8px">${me() && me().owner ? `${S.imp && S.imp.state === 'running' ? `<span class="small muted" role="status">${esc(T('importProgress')(S.imp.done, S.imp.total, S.imp.added))}</span>` : ''}<button class="btn" data-act="importosm"${S.imp && S.imp.state === 'running' ? ' disabled' : ''}>${esc(T('importOsm'))}</button>` : ''}<button class="btn primary" data-act="addspot">+ ${esc(T('addSpot'))}</button></span></div><p class="muted small" style="margin-bottom:10px">${esc(T('spotsNote'))} ${esc(T('importNote'))}</p><div id="aspots">${spotTable()}</div>`;
   } else if (S.adminTab === 'reports') body = reportsList();
   else if (S.adminTab === 'newspots') body = candidatesList();
   else if (S.adminTab === 'feedback') body = feedbackList();
@@ -1221,8 +1229,7 @@ const A = {
   sethome(el) { if (!needLogin()) return false; act(api('PATCH', '/api/me', { spot: el.dataset.id }), T('homeSet')); return false; },
   importosm() {
     if (!confirm(T('importConfirm'))) return false;
-    toast(T('importing'));
-    api('POST', '/api/admin/import-osm').then((r) => load().then(() => loadAdmin()).then(() => { toast(T('importDone')(r)); render(); })).catch(fail);
+    api('POST', '/api/admin/import-osm').then((j) => { S.imp = j; toast(T('importing')); render(); pollImport(); }).catch((e) => { if (e && e.code === 'import_running') { toast(T('err_import_running')); pollImport(); } else fail(e); });
     return false;
   },
   inbox() {

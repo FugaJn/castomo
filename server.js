@@ -921,26 +921,42 @@ function createApp(opts = {}) {
   });
 
   /* Owner-only: pull fishing spots from OpenStreetMap into the spot list (can take a minute). */
-  let importing = false;
-  route('POST', '/api/admin/import-osm', async (c) => {
+  /* The import runs in the background (it can take several minutes) and the page polls its status. */
+  const impJob = { state: 'idle', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], startedAt: null, finishedAt: null };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function runImport(user) {
+    const delay = opts.importDelayMs != null ? opts.importDelayMs : 2000;
+    try {
+      for (const region of osm.REGIONS) {
+        let json = null;
+        for (const ep of osm.ENDPOINTS) {
+          const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 110000);
+          try { json = JSON.parse(await fetchText(osm.urlFor(ep, region), ctrl.signal)); if (!json || !Array.isArray(json.elements)) throw new Error('unexpected response'); break; }
+          catch (e) { json = null; console.warn('[osm] ' + region[0] + ' via ' + new URL(ep).host + ': ' + e.message); }
+          finally { clearTimeout(timer); }
+        }
+        if (json) {
+          const { spots, unnamed } = osm.parseOverpass(json);
+          const r = osm.importSpots(db, tx, spots);
+          impJob.found += spots.length; impJob.unnamed += unnamed; impJob.added += r.added; impJob.duplicates += r.duplicates;
+          if (r.added) { spotsRev = Date.now(); broadcast(); }
+        } else impJob.failed.push(region[0]);
+        impJob.done++;
+        if (delay) await sleep(delay);
+      }
+      audit(user, 'spots.import', 'osm', `found ${impJob.found}, added ${impJob.added}, failed regions: ${impJob.failed.join(',') || 'none'}`);
+    } catch (e) { console.warn('[osm] import crashed: ' + e.message); impJob.failed.push('internal'); }
+    impJob.state = 'done'; impJob.finishedAt = nowISO();
+  }
+  route('POST', '/api/admin/import-osm', (c) => {
     const user = needAdmin(c);
     if (!isOwner(user)) throw new HttpError(403, 'forbidden');
-    if (importing) throw new HttpError(409, 'import_running');
-    importing = true;
-    try {
-      const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 170000);
-      let text;
-      try { text = await fetchText(osm.OVERPASS_URL, ctrl.signal); } catch (e) { console.warn('[osm] ' + e.message); throw new HttpError(502, 'import_failed'); } finally { clearTimeout(timer); }
-      let json;
-      try { json = JSON.parse(text); } catch (_) { throw new HttpError(502, 'import_failed'); }
-      const { spots, unnamed } = osm.parseOverpass(json);
-      const r = osm.importSpots(db, tx, spots);
-      if (r.added) spotsRev = Date.now();
-      audit(user, 'spots.import', 'osm', `found ${spots.length}, added ${r.added}`);
-      broadcast();
-      return { found: spots.length, unnamed, added: r.added, duplicates: r.duplicates };
-    } finally { importing = false; }
+    if (impJob.state === 'running') throw new HttpError(409, 'import_running');
+    Object.assign(impJob, { state: 'running', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], startedAt: nowISO(), finishedAt: null });
+    runImport(user);
+    return { ...impJob };
   });
+  route('GET', '/api/admin/import-osm', (c) => { needAdmin(c); return { ...impJob }; });
 
   /* The whitelist: only accounts whose role is admin or owner can use /api/admin. Only an owner can change it. */
   route('POST', '/api/admin/admins', (c) => {

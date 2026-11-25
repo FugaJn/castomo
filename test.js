@@ -46,7 +46,7 @@ async function fetchText(url) {
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'castomo-'));
-const app = createApp({ dataDir: dir, fetchText });
+const app = createApp({ dataDir: dir, fetchText, importDelayMs: 0 });
 let base;
 test.before(async () => { await new Promise((ok) => app.server.listen(0, '127.0.0.1', ok)); base = 'http://127.0.0.1:' + app.server.address().port; });
 test.after(async () => { await app.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -305,16 +305,23 @@ test('pin limit per user', async () => {
 test('OpenStreetMap import: owner only, de-duplicates, classifies', async () => {
   assert.equal((await carol('POST', '/api/admin/import-osm')).status, 403);
   assert.equal((await bob('POST', '/api/admin/import-osm')).status, 403, 'admins are not enough, owner only');
-  const r = await alice('POST', '/api/admin/import-osm');
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.found, 4, 'unnamed and non-Japan elements are dropped');
-  assert.equal(r.body.unnamed, 1);
+  const waitImport = async () => { for (let i = 0; i < 100; i++) { const j = (await alice('GET', '/api/admin/import-osm')).body; if (j.state === 'done') return j; await new Promise((r) => setTimeout(r, 20)); } throw new Error('import did not finish'); };
+  assert.equal((await carol('GET', '/api/admin/import-osm')).status, 403);
+  const start = await alice('POST', '/api/admin/import-osm');
+  assert.equal(start.status, 200, JSON.stringify(start.body));
+  assert.equal(start.body.state, 'running');
+  const r = { body: await waitImport() };
+  assert.equal(r.body.done, r.body.total);
+  assert.deepEqual(r.body.failed, []);
+  assert.ok(r.body.found >= 4, 'unnamed and non-Japan elements are dropped');
+  assert.ok(r.body.unnamed >= 1);
   assert.equal(r.body.added, 2, 'the two that are not within 300 m of an existing spot');
   const spots = (await carol('GET', '/api/spots')).body.spots;
   const a = spots.find((s) => s.id === 'osm-node-1'), b = spots.find((s) => s.id === 'osm-way-2');
   assert.equal(a.type, 's'); assert.equal(a.en, 'Chita Test Fishing Park'); assert.equal(a.ja, '知多 テスト釣り公園'); assert.equal(a.pref, 'aichi'); assert.equal(a.src, 'osm');
   assert.equal(b.type, 'f');
-  const again = await alice('POST', '/api/admin/import-osm');
+  await alice('POST', '/api/admin/import-osm');
+  const again = { body: await waitImport() };
   assert.equal(again.body.added, 0, 'running it again adds nothing');
   assert.equal(spots.find((s) => s.id === 'osm-node-6'), undefined);
 });

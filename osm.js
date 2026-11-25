@@ -7,14 +7,21 @@
 const { km } = require('./marine.js');
 const STATIONS = require('./stations.js');
 
-const QUERY = '[out:json][timeout:150];area["ISO3166-1"="JP"][admin_level=2]->.jp;(' +
-  'nwr["leisure"="fishing"](area.jp);' +
-  'nwr["sport"="fishing"](area.jp);' +
-  'nwr["man_made"="pier"]["fishing"="yes"](area.jp);' +
-  'nwr["name"~"海釣|釣り公園|釣公園|釣り場|釣場|釣り堀|釣堀|フィッシングパーク|フィッシングピア|Fishing (Park|Pier|Area|Spot)"][!"shop"][!"office"](area.jp);' +
-  'nwr["man_made"="pier"]["name"~"釣|Fishing"](area.jp);' +
+/* One query per region of Japan keeps each Overpass request small enough to finish (a single nationwide query is usually rejected or times out). Boxes overlap a little; duplicates are skipped by OSM id. */
+const REGIONS = [
+  ['Hokkaido', 41.3, 139.3, 45.6, 145.9], ['Tohoku', 37.7, 139.0, 41.6, 142.2], ['Kanto', 34.6, 138.2, 37.2, 141.0],
+  ['Chubu', 34.5, 135.8, 38.6, 139.4], ['Kinki', 33.4, 134.0, 35.8, 136.9], ['Chugoku', 33.6, 130.7, 35.7, 134.5],
+  ['Shikoku', 32.7, 132.0, 34.4, 134.8], ['Kyushu', 30.9, 128.6, 34.8, 132.2], ['Okinawa', 24.0, 122.9, 28.5, 131.4]
+];
+const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+const queryFor = (r) => '[out:json][timeout:90][bbox:' + r.slice(1).join(',') + '];(' +
+  'nwr["leisure"="fishing"];' +
+  'nwr["sport"="fishing"];' +
+  'nwr["man_made"="pier"]["fishing"="yes"];' +
+  'nwr["name"~"海釣|釣り公園|釣公園|釣り場|釣場|釣り堀|釣堀|フィッシングパーク|フィッシングピア|Fishing (Park|Pier|Area|Spot)"][!"shop"][!"office"];' +
+  'nwr["man_made"="pier"]["name"~"釣|Fishing"];' +
   ');out center tags;';
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(QUERY);
+const urlFor = (endpoint, region) => endpoint + '?data=' + encodeURIComponent(queryFor(region));
 
 const FRESH_WATER = new Set(['river', 'lake', 'pond', 'reservoir', 'canal', 'stream', 'stream_pool', 'oxbow', 'lagoon_fresh']);
 const SALT_MAN_MADE = new Set(['pier', 'breakwater', 'groyne', 'jetty']);
@@ -74,4 +81,4 @@ function importSpots(db, tx, candidates) {
   return { added, duplicates: dup };
 }
 
-module.exports = { QUERY, OVERPASS_URL, parseOverpass, importSpots, classify };
+module.exports = { REGIONS, ENDPOINTS, queryFor, urlFor, parseOverpass, importSpots, classify };
