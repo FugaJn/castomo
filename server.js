@@ -359,7 +359,7 @@ function createApp(opts = {}) {
     const name = savePhoto(c.body.photo);
     const old = q('SELECT avatar FROM users WHERE id=?').get(user.id).avatar;
     q('UPDATE users SET avatar=? WHERE id=?').run(name, user.id);
-    if (old) fs.rm(path.join(uploadDir, old), { force: true }, () => {});
+    if (old) fs.rmSync(path.join(uploadDir, old), { force: true });
     broadcast();
     return { avatar: '/uploads/' + name };
   });
@@ -367,7 +367,7 @@ function createApp(opts = {}) {
     const user = needUser(c);
     const old = q('SELECT avatar FROM users WHERE id=?').get(user.id).avatar;
     q("UPDATE users SET avatar='' WHERE id=?").run(user.id);
-    if (old) fs.rm(path.join(uploadDir, old), { force: true }, () => {});
+    if (old) fs.rmSync(path.join(uploadDir, old), { force: true });
     broadcast();
     return {};
   });
@@ -922,7 +922,7 @@ function createApp(opts = {}) {
 
   /* Owner-only: pull fishing spots from OpenStreetMap into the spot list (can take a minute). */
   /* The import runs in the background (it can take several minutes) and the page polls its status. */
-  const impJob = { state: 'idle', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], startedAt: null, finishedAt: null };
+  const impJob = { state: 'idle', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], lastError: '', startedAt: null, finishedAt: null };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   async function runImport(user) {
     const delay = opts.importDelayMs != null ? opts.importDelayMs : 2000;
@@ -932,7 +932,7 @@ function createApp(opts = {}) {
         for (const ep of osm.ENDPOINTS) {
           const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 110000);
           try { json = JSON.parse(await fetchText(osm.urlFor(ep, region), ctrl.signal)); if (!json || !Array.isArray(json.elements)) throw new Error('unexpected response'); break; }
-          catch (e) { json = null; console.warn('[osm] ' + region[0] + ' via ' + new URL(ep).host + ': ' + e.message); }
+          catch (e) { json = null; impJob.lastError = new URL(ep).host + ': ' + String(e.cause && e.cause.code || e.message).slice(0, 80); console.warn('[osm] ' + region[0] + ' via ' + impJob.lastError + ' (' + e.message + ')'); }
           finally { clearTimeout(timer); }
         }
         if (json) {
@@ -952,7 +952,7 @@ function createApp(opts = {}) {
     const user = needAdmin(c);
     if (!isOwner(user)) throw new HttpError(403, 'forbidden');
     if (impJob.state === 'running') throw new HttpError(409, 'import_running');
-    Object.assign(impJob, { state: 'running', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], startedAt: nowISO(), finishedAt: null });
+    Object.assign(impJob, { state: 'running', total: osm.REGIONS.length, done: 0, found: 0, added: 0, duplicates: 0, unnamed: 0, failed: [], lastError: '', startedAt: nowISO(), finishedAt: null });
     runImport(user);
     return { ...impJob };
   });

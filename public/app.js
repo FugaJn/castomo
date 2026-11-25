@@ -128,7 +128,7 @@ function pollImport() {
   S.impT = setTimeout(() => api('GET', '/api/admin/import-osm').then((j) => {
     S.imp = j;
     if (j.state === 'running') { render(); pollImport(); return; }
-    return load().then(() => loadAdmin()).then(() => { toast(j.failed.length >= j.total ? T('err_import_failed') : T('importDone')(j), j.failed.length ? 'bad' : undefined); render(); });
+    return load().then(() => loadAdmin()).then(() => { toast((j.failed.length >= j.total ? T('err_import_failed') : T('importDone')(j)) + (j.failed.length && j.lastError ? ' [' + j.lastError + ']' : ''), j.failed.length ? 'bad' : undefined); render(); });
   }).catch(() => pollImport()), 3000);
 }
 function loadAdmin(push) {
