@@ -1,7 +1,7 @@
 /* Castomo browser app. Part 1: state, helpers, data loading, feed ranking, header, tide, board and catches views. */
 (function () {
 'use strict';
-const D = window.CAST, TD = window.TIDE, I = window.I18N, CW = 44;
+const D = window.CAST, TD = window.TIDE, I = window.I18N;
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const LS = {
@@ -318,7 +318,11 @@ function tideView() {
   const dd = dayDD(S.day);
   const weatherOnly = fresh || (mode === 'live' && !dd.tideOk);
   const isToday = S.day === 0, nowMin = (Date.now() - dd.ms0) / 6e4, curH = Math.floor(nowMin / 60);
-  const W = 24 * CW, Hh = 240, top = 30, bot = 14;
+  /* The chart always fits the screen: column width comes from the space available, nothing scrolls sideways. */
+  const vw = document.documentElement.clientWidth || window.innerWidth, vh = window.innerHeight || 800, narrow = vw < 600;
+  const keyW = narrow ? 46 : 64, CW = Math.max(9, (Math.min(vw, 1080 + 32) - 32 - keyW - 2) / 24), W = 24 * CW;
+  const Hh = Math.round(Math.max(150, Math.min(narrow ? 200 : 240, vh - (narrow ? 500 : 470)))), top = 30, bot = 14;
+  const stepN = CW >= 34 ? 1 : CW >= 22 ? 2 : 3;
   const wsel = (v, k) => `<button data-act="water" data-v="${v}" aria-pressed="${S.water === v}">${esc(T(k))}</button>`;
   const active = S.spots.filter((s) => s.active).length;
   const head = `<div class="tide-head"><div class="stackv"><label>${esc(T('homespot'))}<select id="spot">${spotOpts(sp.id, { water: S.water })}</select></label>
@@ -334,13 +338,13 @@ function tideView() {
     const maxH = Math.max.apply(null, dd.curve.map((p) => p[1]));
     const ymax = Math.max(100, Math.ceil((maxH + 25) / 50) * 50), step = ymax > 300 ? 100 : 50;
     const X = (m) => m / 60 * CW, Y = (h) => Hh - bot - (Math.max(0, h) / ymax) * (Hh - top - bot);
-    svg = `<svg width="${W}" height="${Hh}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${esc(T('tideLbl'))}">`;
+    svg = `<svg width="${W.toFixed(1)}" height="${Hh}" style="max-width:100%" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${esc(T('tideLbl'))}">`;
     svg += `<rect class="c-night" x="0" y="0" width="${X(dd.sr)}" height="${Hh}"/><rect class="c-night" x="${X(dd.ss)}" y="0" width="${W - X(dd.ss)}" height="${Hh}"/>`;
     for (let i = 1; i < 24; i++) svg += `<line class="c-hr" x1="${i * CW}" x2="${i * CW}" y1="0" y2="${Hh}"/>`;
     for (let v = 0; v <= ymax; v += step) svg += `<line class="c-grid" x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}"/><text class="c-lbl" x="4" y="${Y(v) - 3}">${v} cm</text>`;
     const line = dd.curve.map((p, k) => (k ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join(' ');
     svg += `<path class="c-area" d="${line} L${W} ${Hh - bot} L0 ${Hh - bot} Z"/><path class="c-line" d="${line}"/>`;
-    svg += `<text class="c-lbl" x="${X(dd.sr) + 4}" y="12">${esc(T('sunrise'))} ${fmt(dd.sr)}</text><text class="c-lbl" text-anchor="end" x="${X(dd.ss) - 4}" y="12">${esc(T('sunset'))} ${fmt(dd.ss)}</text>`;
+    svg += `<text class="c-lbl" x="${X(dd.sr) + 4}" y="12">${narrow ? '↑' : esc(T('sunrise'))} ${fmt(dd.sr)}</text><text class="c-lbl" text-anchor="end" x="${X(dd.ss) - 4}" y="12">${narrow ? '↓' : esc(T('sunset'))} ${fmt(dd.ss)}</text>`;
     dd.ext.forEach((e) => {
       const x = X(e.m), y = Y(e.h), ty = e.hi ? y - 12 : y + 22, anchor = x < 40 ? 'start' : x > W - 40 ? 'end' : 'middle';
       svg += `<circle class="c-dot" cx="${x}" cy="${y}" r="5"/><text class="c-ext" text-anchor="${anchor}" x="${x}" y="${ty}">${fmt(e.m)} · ${Math.round(e.h)}</text>`;
@@ -350,13 +354,13 @@ function tideView() {
   }
   const cells = [[], [], [], []];
   dd.wx.forEach((w, h) => {
-    const cur = isToday && h === curH ? ' cur' : '', strong = w.w != null && w.w >= 8 ? ' strong' : '';
-    cells[0].push(`<div class="hh${cur}">${pad(h)}</div>`);
-    cells[1].push(`<div class="${cur.trim()}">${w.g}</div>`);
-    cells[2].push(`<div class="num${cur}">${num0(w.t, (v) => Math.round(v) + '°')}</div>`);
-    cells[3].push(`<div class="num${cur}${strong}"${w.d != null ? ` title="${Math.round(w.d)}°"` : ''}>${w.w == null ? '–' : windArrow(w.d) + Math.round(w.w)}</div>`);
+    const cur = isToday && h === curH ? ' cur' : '', show = h % stepN === 0, strong = w.w != null && w.w >= 8 ? ' strong' : '';
+    cells[0].push(`<div class="hh${cur}">${show ? pad(h) : ''}</div>`);
+    cells[1].push(`<div class="${cur.trim()}">${show ? w.g : ''}</div>`);
+    cells[2].push(`<div class="num${cur}">${show ? num0(w.t, (v) => Math.round(v) + '°') : ''}</div>`);
+    cells[3].push(`<div class="num${cur}${strong}"${w.d != null ? ` title="${Math.round(w.d)}°"` : ''}>${!show ? '' : w.w == null ? '–' : windArrow(w.d) + Math.round(w.w)}</div>`);
   });
-  const hrs = cells.map((c) => `<div class="hrs">${c.join('')}</div>`).join('');
+  const hrs = cells.map((c) => `<div class="hrs${stepN > 1 ? ' thin' : ''}">${c.join('')}</div>`).join('');
   const ws = dd.wx.filter((w) => w.w != null).map((w) => w.w), maxW = ws.length ? Math.max.apply(null, ws) : null;
   const wn = dd.wx[Math.min(23, Math.max(0, curH))];
   let stats = '';
@@ -394,8 +398,8 @@ function tideView() {
   if (mode === 'live' && !live.weather) note += ` <span class="err">${esc(T('fcNoWx'))}</span>`;
   const top1 = weatherOnly ? `<p class="muted small" style="margin-bottom:10px">${esc(fresh ? T('noTide') : mode === 'live' ? T('fcNoTide') : '')}</p>` : '';
   return `<section>${head}<div class="stats">${stats}</div>${top1}
-   <div class="panel chartpanel"><div class="keys">${weatherOnly ? '' : '<div class="k0">cm</div>'}<div>${esc(T('hour'))}</div><div>${esc(T('wx'))}</div><div>${esc(T('temp'))}</div><div>${esc(T('wind'))} m/s</div></div>
-   <div class="scroller" id="scroller" tabindex="0" aria-label="${esc(T(weatherOnly ? 'wx' : 'tideLbl'))}"><div class="chartcol">${svg}${hrs}</div></div></div>
+   <div class="panel chartpanel" style="grid-template-columns:${keyW}px minmax(0,1fr)"><div class="keys">${weatherOnly ? '' : `<div class="k0" style="height:${Hh}px">cm</div>`}<div>${esc(T('hour'))}</div><div>${esc(T('wx'))}</div><div>${esc(T('temp'))}</div><div>${esc(T('wind'))} m/s</div></div>
+   <div class="scroller" id="scroller" aria-label="${esc(T(weatherOnly ? 'wx' : 'tideLbl'))}"><div class="chartcol" style="width:${W.toFixed(1)}px;max-width:100%">${svg}${hrs}</div></div></div>
    <div class="week">${week}</div><p class="sample">${note}</p></section>`;
 }
 
@@ -1120,8 +1124,6 @@ function render() {
   restoreInputs(keep);
   if (S.tab === 'map') mountMap();
   S.rendered = true; S.dirty = false;
-  const sc = $('#scroller');
-  if (sc) { const nowM = S.day === 0 ? new Date().getHours() * 60 + new Date().getMinutes() : 360; sc.scrollLeft = Math.max(0, nowM / 60 * CW - sc.clientWidth / 2); }
   const m = $('#msgs'); if (m && atBottom) m.scrollTop = m.scrollHeight;
   if (S.focusId) { const f = document.getElementById(S.focusId); if (f) f.focus(); S.focusId = null; }
   else if (S.sheet && !keep.focus && ['auth', 'account', 'feedback', 'spot'].indexOf(S.sheet.k) > -1) { const f = $('.sheet input:not([type=hidden]),.sheet textarea'); if (f) f.focus(); }
@@ -1427,6 +1429,16 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.loaded) { load(true); markRead(); } });
 setInterval(() => { if (!document.hidden && S.loaded) load(true); }, 30000);
+
+/* Re-fit the tide chart when the window is resized or the phone is rotated. */
+let fitTimer = null, fitSize = '';
+window.addEventListener('resize', () => {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => {
+    const size = (document.documentElement.clientWidth || 0) + 'x' + Math.round((window.innerHeight || 0) / 40);
+    if (size !== fitSize && S.tab === 'tide' && S.rendered && !S.sheet) { fitSize = size; render(); }
+  }, 150);
+});
 
 /* ---------- start ---------- */
 render();
