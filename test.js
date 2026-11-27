@@ -73,6 +73,27 @@ test('static client and health', async () => {
   assert.notEqual((await fetch(base + '/../server.js')).status, 200);
 });
 
+test('SEO pages, sitemap and robots', async () => {
+  const get = async (p) => { const r = await fetch(base + p); return { status: r.status, type: r.headers.get('content-type'), text: await r.text() }; };
+  const ja = await get('/ja/');
+  assert.equal(ja.status, 200); assert.match(ja.type, /text\/html/);
+  assert.match(ja.text, /<html lang="ja">/); assert.match(ja.text, /<h1>/); assert.match(ja.text, /rel="canonical" href="https:\/\/castomo\.app\/ja\/"/);
+  assert.match(ja.text, /hreflang="en"/);
+  const en = await get('/en');
+  assert.equal(en.status, 200); assert.match(en.text, /<html lang="en">/);
+  const area = await get('/ja/area/aichi');
+  assert.equal(area.status, 200); assert.match(area.text, /愛知県/);
+  const spot = await get('/en/spot/nagoya');
+  assert.equal(spot.status, 200); assert.match(spot.text, /application\/ld\+json/); assert.match(spot.text, /og:title/);
+  assert.equal((await get('/en/spot/does-not-exist')).status, 404);
+  assert.equal((await get('/ja/area/nowhere')).status, 404);
+  const sm = await get('/sitemap.xml');
+  assert.equal(sm.status, 200); assert.match(sm.type, /xml/); assert.match(sm.text, /<loc>https:\/\/castomo\.app\/ja\/spot\/nagoya<\/loc>/);
+  const rb = await get('/robots.txt');
+  assert.match(rb.text, /Disallow: \/api\//); assert.match(rb.text, /Sitemap: https:\/\/castomo\.app\/sitemap\.xml/);
+  const h = await fetch(base + '/ja/', { method: 'HEAD' }); assert.equal(h.status, 200);
+});
+
 test('password rules enforced', async () => {
   const c = client();
   for (const pw of ['Sh0rt!a', 'alllowercase1!', 'ALLUPPERCASE1!', 'NoNumbers!!', 'NoSpecial123A']) {

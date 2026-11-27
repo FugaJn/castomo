@@ -17,6 +17,7 @@ const D = require('./public/spots.js');
 const { openDb, tx } = require('./db.js');
 const { createForecaster, km: kmBetween } = require('./marine.js');
 const osm = require('./osm.js');
+const { createSeo } = require('./seo.js');
 
 const PREF_IDS = new Set(D.PREFS.map((p) => p.id));
 const REGION_IDS = new Set(D.REGIONS.map((r) => r.id));
@@ -1033,6 +1034,8 @@ function createApp(opts = {}) {
     });
   }
 
+  const seo = createSeo({ q, siteUrl: opts.siteUrl || process.env.SITE_URL });
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://x');
@@ -1057,6 +1060,13 @@ function createApp(opts = {}) {
         const name = p.slice(9);
         if (!/^[0-9a-f]{24}\.jpg$/.test(name)) { res.writeHead(404, SECURITY); return res.end(); }
         return serveFile(req, res, path.join(uploadDir, name), 'public, max-age=31536000, immutable');
+      }
+      const page = seo.handle(p);
+      if (page) {
+        if (page.status === 404) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...SECURITY }); return res.end('Not found'); }
+        const buf = Buffer.from(page.body, 'utf8');
+        res.writeHead(200, { 'Content-Type': page.type, 'Content-Length': buf.length, 'Cache-Control': page.cache, ...SECURITY });
+        return res.end(req.method === 'HEAD' ? undefined : buf);
       }
       const rel = p === '/' ? 'index.html' : p.replace(/^\/+/, '');
       const file = path.join(publicDir, rel);

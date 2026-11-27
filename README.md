@@ -16,6 +16,7 @@ Data lives in `DATA_DIR` (default `./data`): `castomo.db` (SQLite) and `uploads/
 | `PORT`, `HOST` | listen address (default 3000, 0.0.0.0) |
 | `DATA_DIR` | where the database and photos are stored |
 | `COOKIE_SECURE=1` | set when served over HTTPS (do this in production) |
+| `SITE_URL` | public address used in sitemap, canonical and hreflang links, e.g. `https://castomo.app` (defaults to that) |
 | `TRUST_PROXY=1` | set when behind nginx/Caddy/Cloudflare so rate limits see real IPs |
 | `ADMIN_SETUP_CODE` | optional secret (16+ chars) to claim the first owner from the browser |
 
